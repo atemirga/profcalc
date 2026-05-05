@@ -49,6 +49,7 @@
     'dashboard':    pageDashboard,
     'manufacturers': pageManufacturers,
     'pricing':      pagePricing,
+    'catalogs':     pageCatalogs,            // ── Phase 6: new page
     'discounts':    pageDiscounts,
     'installers':   pageInstallers,
     'analytics':    pageAnalytics,
@@ -67,6 +68,7 @@
       ['Дашборд', 'dashboard'],
       ['Производители', 'manufacturers'],
       ['Цены', 'pricing'],
+      ['Каталоги', 'catalogs'],
       ['Скидки', 'discounts'],
       ['Оконщики', 'installers'],
       ['Аналитика', 'analytics'],
@@ -734,6 +736,147 @@
     }
     s.addEventListener('change', () => state[key] = s.value);
     return s;
+  }
+
+  // ── Phase 6: Catalogs page — generic CRUD UI for all 9 new tables
+  const CATALOGS = [
+    { id: 'colors',         title: 'Цвета (RAL)',          fields: [
+      { k: 'id',  l: 'ID' }, { k: 'ral', l: 'RAL код' }, { k: 'name', l: 'Название' },
+      { k: 'hex', l: 'Hex (#RRGGBB)' }, { k: 'surcharge_pct', l: 'Наценка %', type: 'number' },
+    ]},
+    { id: 'hardware_kits',  title: 'Фурнитурные комплекты', fields: [
+      { k: 'id', l: 'ID' }, { k: 'vendor', l: 'Бренд' }, { k: 'name', l: 'Модель' },
+      { k: 'kind', l: 'Тип', opts: ['window','door','sliding'] },
+      { k: 'price_per_sash', l: 'Цена/створка', type: 'number' }, { k: 'notes', l: 'Примечание' },
+    ]},
+    { id: 'handles',        title: 'Ручки',                 fields: [
+      { k: 'id', l: 'ID' }, { k: 'vendor', l: 'Бренд' }, { k: 'name', l: 'Модель' },
+      { k: 'kind', l: 'Тип', opts: ['window','door'] },
+      { k: 'color_default', l: 'Цвет (id)' }, { k: 'price', l: 'Цена', type: 'number' },
+    ]},
+    { id: 'sills',          title: 'Подоконники',           fields: [
+      { k: 'id', l: 'ID' }, { k: 'vendor', l: 'Бренд' }, { k: 'name', l: 'Модель' },
+      { k: 'width_mm', l: 'Ширина мм', type: 'number' }, { k: 'color', l: 'Цвет' },
+      { k: 'price_per_m', l: 'Цена/м', type: 'number' },
+    ]},
+    { id: 'ebbs',           title: 'Отливы',                fields: [
+      { k: 'id', l: 'ID' }, { k: 'material', l: 'Материал' },
+      { k: 'width_mm', l: 'Ширина мм', type: 'number' }, { k: 'color', l: 'Цвет' },
+      { k: 'price_per_m', l: 'Цена/м', type: 'number' },
+    ]},
+    { id: 'meshes',         title: 'Сетки москитные',       fields: [
+      { k: 'id', l: 'ID' },
+      { k: 'kind', l: 'Тип', opts: ['frame','sliding','pleated','antikoshka','roll'] },
+      { k: 'name', l: 'Название' }, { k: 'color', l: 'Цвет' },
+      { k: 'price_per_unit', l: 'Цена/шт', type: 'number' }, { k: 'unit', l: 'Ед.' },
+    ]},
+    { id: 'door_hardware',  title: 'Дверной комплект',      fields: [
+      { k: 'id', l: 'ID' },
+      { k: 'category', l: 'Категория', opts: ['lock','lock_tongue','cylinder','hinge','closer','threshold','strike','rosette','fixator','handle_kit'] },
+      { k: 'vendor', l: 'Бренд' }, { k: 'name', l: 'Название' },
+      { k: 'unit', l: 'Ед.' }, { k: 'qty_per_door', l: 'Кол-во/дверь', type: 'number' },
+      { k: 'price', l: 'Цена', type: 'number' }, { k: 'color_default', l: 'Цвет (id)' }, { k: 'notes', l: 'Прим.' },
+    ]},
+    { id: 'profile_parts',  title: 'Профильные части (Logikal)', fields: [
+      { k: 'id', l: 'ID' }, { k: 'system_id', l: 'Система' },
+      { k: 'kind', l: 'Тип', opts: ['frame','sash','mullion','bead','shtulp','turn','adapter','door_sash','threshold'] },
+      { k: 'code', l: 'Код' }, { k: 'width_mm', l: 'Шир. мм', type: 'number' },
+      { k: 'thickness_mm', l: 'Толщ. мм', type: 'number' }, { k: 'name', l: 'Название' },
+      { k: 'price_per_m', l: 'Цена/м', type: 'number' },
+    ]},
+    { id: 'seals',          title: 'Уплотнители',           fields: [
+      { k: 'id', l: 'ID' }, { k: 'code', l: 'Код' },
+      { k: 'position', l: 'Позиция', opts: ['internal','external','central','bead','sash'] },
+      { k: 'name', l: 'Название' }, { k: 'price_per_m', l: 'Цена/м', type: 'number' },
+    ]},
+    { id: 'brackets',       title: 'Уголки / сухари / соединители', fields: [
+      { k: 'id', l: 'ID' },
+      { k: 'category', l: 'Категория', opts: ['corner','mull_connector','sukhar','frame_anchor','consumable'] },
+      { k: 'code', l: 'Код' }, { k: 'name', l: 'Название' },
+      { k: 'unit', l: 'Ед.' }, { k: 'price_per_unit', l: 'Цена/шт', type: 'number' },
+    ]},
+  ];
+
+  async function pageCatalogs() {
+    const params = (window.location.hash.match(/^#\/catalogs(?:\/(.+))?/) || [])[1];
+    const activeId = params || CATALOGS[0].id;
+    const cat = CATALOGS.find(c => c.id === activeId) || CATALOGS[0];
+
+    layout('catalogs', { title: 'Каталоги', subtitle: 'Цвета, фурнитура, профили, уплотнители, дверной комплект — всё в одном месте',
+      actions: [h('button', { class: 'btn btn-accent', onClick: () => editRow(cat, {}, true) }, '+ Добавить запись')] },
+      h('div', { class: 'card' }, [
+        // tab strip
+        h('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;padding:14px;border-bottom:1px solid var(--rule)' },
+          CATALOGS.map(c => h('a', {
+            href: '#/catalogs/' + c.id,
+            style: `padding:6px 12px;border-radius:6px;font-size:12.5px;text-decoration:none;color:${c.id === activeId ? '#fff' : 'var(--text)'};background:${c.id === activeId ? 'var(--accent)' : '#f5f2ec'};font-weight:${c.id === activeId ? 600 : 500}`,
+          }, c.title))),
+        // table
+        h('div', { id: 'catalog-tbl', style: 'padding:0' }, h('div', { class: 'empty' }, 'Загрузка...')),
+      ]));
+
+    try {
+      const rows = await api('/' + cat.id);
+      const tbl = document.getElementById('catalog-tbl');
+      clear(tbl);
+      const t = h('table', { class: 'tbl' }, [
+        h('thead', {}, h('tr', {}, [...cat.fields.map(f => h('th', {}, f.l)), h('th', { style: 'width:120px' }, 'Действия')])),
+        h('tbody', {}, rows.map(r => h('tr', {}, [
+          ...cat.fields.map(f => h('td', { class: f.type === 'number' ? 'mono' : '' }, String(r[f.k] ?? '—'))),
+          h('td', {}, [
+            h('button', { class: 'btn btn-sm', onClick: () => editRow(cat, r, false), style: 'margin-right:4px' }, 'Изм.'),
+            h('button', { class: 'btn btn-sm btn-danger', onClick: async () => {
+              if (!confirm('Удалить ' + r.id + '?')) return;
+              await api('/' + cat.id + '/' + r.id, { method: 'DELETE' });
+              toast('Удалено'); pageCatalogs();
+            } }, '✕'),
+          ]),
+        ]))),
+      ]);
+      tbl.appendChild(t);
+    } catch (e) {
+      document.getElementById('catalog-tbl').innerHTML = '<div class="empty">Ошибка: ' + e.message + '</div>';
+    }
+  }
+
+  function editRow(cat, row, isNew) {
+    const f = { ...row };
+    const inputs = cat.fields.map(field => {
+      let inp;
+      if (field.opts) {
+        inp = h('select', { class: 'text', style: 'width:100%' }, [
+          ...field.opts.map(o => {
+            const opt = document.createElement('option');
+            opt.value = o; opt.textContent = o;
+            if (f[field.k] === o) opt.selected = true;
+            return opt;
+          }),
+        ]);
+      } else {
+        inp = h('input', { class: 'text', style: 'width:100%', type: field.type || 'text', value: f[field.k] != null ? f[field.k] : '' });
+      }
+      inp.addEventListener('input', () => f[field.k] = field.type === 'number' ? (parseFloat(inp.value) || 0) : inp.value);
+      inp.addEventListener('change', () => f[field.k] = field.type === 'number' ? (parseFloat(inp.value) || 0) : inp.value);
+      return h('div', { style: 'margin-bottom:10px' }, [
+        h('label', { style: 'display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600;text-transform:uppercase;letter-spacing:.4px' }, field.l + (field.k === 'id' ? ' (обязательно, уникально)' : '')),
+        inp,
+      ]);
+    });
+    modal({
+      title: (isNew ? 'Новая запись · ' : 'Изменить · ') + cat.title,
+      body: h('div', {}, inputs),
+      submitText: isNew ? 'Создать' : 'Сохранить',
+      onSubmit: async () => {
+        if (isNew) {
+          if (!f.id) throw new Error('ID обязателен');
+          await api('/' + cat.id, { method: 'POST', body: JSON.stringify(f) });
+        } else {
+          await api('/' + cat.id + '/' + row.id, { method: 'PUT', body: JSON.stringify(f) });
+        }
+        toast(isNew ? 'Создано' : 'Сохранено');
+        pageCatalogs();
+      },
+    });
   }
 
   // ── boot ─────────────────────────────────────────────────────────────
