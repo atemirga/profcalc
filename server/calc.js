@@ -291,9 +291,36 @@ export function calcWindow(input) {
     }
   }
 
-  // Glazing
+  // Glazing — Phase 12: per-glass-pack itemized lines with size in mm
   const glazArt = art(glazingArticle(glaz.formula));
-  allLines.push(tag(line(`Стеклопакет ${glaz.formula}`, glazingArea, 'м²', glazArt, priceLevel), 'glazing'));
+  // Walk layout sections to emit one line per distinct glass packet size
+  // (a stock cutting list will optimize identical sizes anyway).
+  const glassMap = {};
+  layout.rows.forEach((row, ri) => {
+    const rowHRel = rowHs[ri];
+    const colRatios = normalize(row.sections, width, 'width_mm');
+    row.sections.forEach((sec, ci) => {
+      const sw_m = w_m * colRatios[ci];
+      const code = sec.opening || 'FIX';
+      const isFix = code === 'FIX' || code.endsWith('-FIX');
+      const insetM = isFix ? 0.005 : sashFrameInset;  // 5mm fixed bortik vs 70mm sash inset
+      const gW = Math.max(0, +(sw_m   - 2 * insetM).toFixed(3));
+      const gH = Math.max(0, +(rowHRel - 2 * insetM).toFixed(3));
+      if (gW <= 0 || gH <= 0) return;
+      const k = `${Math.round(gW * 1000)}×${Math.round(gH * 1000)}`;
+      if (glassMap[k]) glassMap[k].qty += 1;
+      else glassMap[k] = { wMm: Math.round(gW * 1000), hMm: Math.round(gH * 1000), areaM2: gW * gH, qty: 1 };
+    });
+  });
+  Object.values(glassMap).forEach(g => {
+    const label = `Стеклопакет ${glaz.formula} · ${g.wMm}×${g.hMm} мм` + (g.qty > 1 ? ` (×${g.qty})` : '');
+    const totalArea = +(g.areaM2 * g.qty).toFixed(3);
+    allLines.push(tag({
+      label, qty: totalArea.toFixed(2) + ' м²', qtyNum: totalArea, unit: 'м²',
+      article: glazArt.article, unitPrice: glazArt[priceLevel],
+      price: Math.round(totalArea * glazArt[priceLevel]),
+    }, 'glazing'));
+  });
 
   // Hardware — caller can pick a specific kit; otherwise default Roto NT
   const winSashCount = openCount - doorCount - slidingCount;
@@ -774,6 +801,136 @@ function summarizeByCategory(lines) {
   const out = {};
   for (const c of CATEGORIES) out[c] = 0;
   for (const l of lines) out[l.category] = (out[l.category] || 0) + l.price;
+  return out;
+}
+
+// ── Phase 10: stock-bar packing (раскрой по хлыстам).
+// Default stock bar = 6500mm. Saw kerf = 4mm per cut.
+// FFD (First-Fit-Decreasing): expand each bar by qty into individual cuts,
+// sort by length descending, then place each into the first bar that fits.
+// Returns: { stockLength, kerf, perProfile: [{ profileCode, profileName, color,
+//   bars: [{ idx, used, waste, cuts: [{ posLabel, role, length }] }],
+//   totalStockBars, totalUsedMm, totalWasteMm, efficiency }], summary: {...} }
+export function packStockBars(cutBars, opts = {}) {
+  const STOCK = opts.stockLength || 6500;
+  const KERF = opts.kerf != null ? opts.kerf : 4;  // mm consumed by each saw cut
+
+  // Group cuts by profileCode + color
+  const byProfile = {};
+  for (const b of cutBars) {
+    const key = b.profileCode + '|' + (b.color || '');
+    if (!byProfile[key]) {
+      byProfile[key] = {
+        profileCode: b.profileCode, profileName: b.profileName, color: b.color,
+        cuts: [],
+      };
+    }
+    // Expand by qty (each unit becomes a separate cut to be packed)
+    for (let i = 0; i < b.qty; i++) {
+      byProfile[key].cuts.push({
+        posLabel: b.posLabel, role: b.role, length: b.lengthMm,
+      });
+    }
+  }
+
+  const perProfile = [];
+  let summaryStockBars = 0;
+  let summaryUsedMm = 0;
+  let summaryWasteMm = 0;
+
+  for (const grp of Object.values(byProfile)) {
+    // Sort cuts longest first (FFD)
+    grp.cuts.sort((a, b) => b.length - a.length);
+    const bars = [];
+    for (const cut of grp.cuts) {
+      // Find first bar that fits
+      let placed = false;
+      for (const bar of bars) {
+        const need = cut.length + (bar.cuts.length > 0 ? KERF : 0);
+        if (bar.used + need <= STOCK) {
+          if (bar.cuts.length > 0) bar.used += KERF;
+          bar.cuts.push(cut);
+          bar.used += cut.length;
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        // Open a new bar
+        bars.push({ idx: bars.length + 1, used: cut.length, cuts: [cut] });
+      }
+    }
+    // Compute waste per bar
+    bars.forEach(b => { b.waste = STOCK - b.used; });
+    const totalUsed = bars.reduce((s, b) => s + b.used, 0);
+    const totalWaste = bars.reduce((s, b) => s + b.waste, 0);
+    perProfile.push({
+      ...grp, bars,
+      totalStockBars: bars.length,
+      totalUsedMm: totalUsed,
+      totalWasteMm: totalWaste,
+      efficiency: bars.length > 0 ? +(totalUsed / (bars.length * STOCK) * 100).toFixed(1) : 100,
+    });
+    summaryStockBars += bars.length;
+    summaryUsedMm += totalUsed;
+    summaryWasteMm += totalWaste;
+  }
+
+  return {
+    stockLength: STOCK, kerf: KERF, perProfile,
+    summary: {
+      totalStockBars: summaryStockBars,
+      totalUsedMm: summaryUsedMm,
+      totalWasteMm: summaryWasteMm,
+      totalLengthM: +(summaryStockBars * STOCK / 1000).toFixed(2),
+      efficiency: summaryStockBars > 0 ? +(summaryUsedMm / (summaryStockBars * STOCK) * 100).toFixed(1) : 100,
+    },
+  };
+}
+
+// ── Phase 12: Build per-glass-pack size list for an item layout.
+// Returns: [{ posIdx, secLabel, widthMm, heightMm, formula, areaM2, isDoor }]
+// Glass W/H = section size − 2×inset; inset = 70mm (sash) or 5mm (fixed).
+export function buildGlassList(items) {
+  const out = [];
+  function normalize(arr, total, key) {
+    const fixedSum = arr.reduce((s, x) => s + (x[key] || 0), 0);
+    const ratioItems = arr.filter(x => !x[key]);
+    const remaining = Math.max(0, total - fixedSum);
+    const ratioSum = ratioItems.reduce((s, x) => s + (x.ratio ?? 1), 0) || 1;
+    return arr.map(x => x[key] ? x[key] : remaining * (x.ratio ?? 1) / ratioSum);
+  }
+  items.forEach((it, idx) => {
+    const layout = it.layout || { width: 1500, height: 1400, rows: [] };
+    const itQty = it.qty || 1;
+    const glaz = it.glazingId ? db.prepare('SELECT * FROM glazing WHERE id = ?').get(it.glazingId) : null;
+    const formula = glaz ? glaz.formula : '4-10-4-10-4';
+    const rowHs = normalize(layout.rows || [], layout.height, 'height_mm');
+    layout.rows.forEach((row, ri) => {
+      const rowH = rowHs[ri];
+      const colWs = normalize(row.sections || [], layout.width, 'width_mm');
+      row.sections.forEach((sec, ci) => {
+        const sw = colWs[ci];
+        const code = sec.opening || 'FIX';
+        const isFix = code === 'FIX' || code.endsWith('-FIX');
+        const isDoor = typeof code === 'string' && code.startsWith('ДВЕРЬ-');
+        const inset = isFix ? 5 : 70;
+        const gW = Math.max(0, Math.round(sw   - 2 * inset));
+        const gH = Math.max(0, Math.round(rowH - 2 * inset));
+        if (gW <= 0 || gH <= 0) return;
+        out.push({
+          posIdx: idx + 1,
+          posLabel: `Поз:${String(idx + 1).padStart(3, '0')}`,
+          secLabel: `Ряд ${ri + 1} · Секция ${ci + 1}`,
+          openingCode: code,
+          widthMm: gW, heightMm: gH,
+          formula, areaM2: +(gW * gH / 1e6).toFixed(3),
+          isDoor, isFix,
+          qty: itQty,
+        });
+      });
+    });
+  });
   return out;
 }
 

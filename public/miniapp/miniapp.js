@@ -450,6 +450,9 @@
       // ── Phase 5: factory order card (object/responsible/warehouse/orderNumber + assembly fee)
       body.appendChild(orderCard());
 
+      // ── Phase 15: reports card — full list of report PDFs
+      if (state.project.id) body.appendChild(reportsCard());
+
       // Items
       body.appendChild(h('div', { class: 'section-label', style: 'display:flex;justify-content:space-between;align-items:baseline' }, [
         h('span', {}, `Позиции (${state.project.items.length})`),
@@ -560,6 +563,58 @@
               c.label,
             ]);
           })),
+      ]);
+      return card;
+    }
+
+    // ── Phase 15: reports card — list all available PDF reports for the project
+    function reportsCard() {
+      const pid = state.project.id;
+      if (!pid) return null;
+      const items = state.project.items || [];
+      const reports = [
+        ['📄', 'Общий КП', 'со спецификацией, раскроем 1D, хлыстами', '/api/kp/' + (state.lastKp?.id || '') + '.pdf', !!state.lastKp],
+        ['🧾', 'Заявка-накладная', 'для производства', '/api/projects/' + pid + '/invoice.pdf', true],
+        ['🪟', 'Спецификация стеклопакетов', 'для стекольного цеха', '/api/projects/' + pid + '/glass-spec.pdf', true],
+        ['🔩', 'Спецификация фурнитуры', 'для отдела закупок', '/api/projects/' + pid + '/hardware-spec.pdf', true],
+      ];
+      const card = h('div', { class: 'card pad', style: 'margin-bottom:14px' }, [
+        h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px' }, [
+          h('div', { style: 'font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px' }, 'Отчёты'),
+          h('span', { style: 'font-size:11px;color:var(--muted)' }, reports.length + items.length + ' доступно'),
+        ]),
+        h('div', { style: 'display:flex;flex-direction:column;gap:6px' },
+          reports.map(([icon, title, sub, url, enabled]) => h('button', {
+            disabled: !enabled,
+            onClick: () => {
+              if (!enabled) { toast(title === 'Общий КП' ? 'Сначала сформируйте КП кнопкой ниже' : 'Сохраните проект', 'error'); return; }
+              const full = window.location.origin + url;
+              if (tg?.openLink) tg.openLink(full, { try_instant_view: false }); else window.open(full, '_blank');
+            },
+            style: `display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--rule);border-radius:8px;background:${enabled ? '#fff' : '#f5f2ec'};cursor:${enabled ? 'pointer' : 'not-allowed'};opacity:${enabled ? 1 : .55};text-align:left;width:100%`,
+          }, [
+            h('span', { style: 'font-size:18px' }, icon),
+            h('div', { style: 'flex:1;min-width:0' }, [
+              h('div', { style: 'font-size:13.5px;font-weight:600;letter-spacing:-.1px' }, title),
+              h('div', { style: 'font-size:11px;color:var(--muted);margin-top:1px' }, sub),
+            ]),
+            h('span', { style: 'color:var(--accent);font-size:13px' }, '↓'),
+          ]))),
+        items.length ? h('div', { style: 'margin-top:10px;padding-top:10px;border-top:1px dashed var(--rule)' }, [
+          h('div', { style: 'font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px' }, 'КП по каждой позиции отдельно'),
+          h('div', { style: 'display:flex;flex-direction:column;gap:5px' },
+            items.map((it, idx) => h('button', {
+              onClick: () => {
+                const url = window.location.origin + '/api/projects/' + pid + '/items/' + idx + '/kp.pdf';
+                if (tg?.openLink) tg.openLink(url, { try_instant_view: false }); else window.open(url, '_blank');
+              },
+              style: 'display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--rule);border-radius:6px;background:#fff;cursor:pointer;text-align:left;width:100%;font-size:12.5px',
+            }, [
+              h('span', { style: 'color:var(--accent);font-family:var(--mono);font-weight:600;font-size:11px;width:56px' }, 'Поз:' + String(idx + 1).padStart(3, '0')),
+              h('span', { style: 'flex:1;color:var(--text)' }, it.name || 'Окно ' + (idx + 1)),
+              h('span', { style: 'color:var(--muted);font-size:11px' }, '↓ PDF'),
+            ]))),
+        ]) : null,
       ]);
       return card;
     }

@@ -3,7 +3,7 @@ import PDFDocument from 'pdfkit';
 import path from 'node:path';
 import fs from 'node:fs';
 import db from './db.js';
-import { calcProject, calcWindow, buildBom } from './calc.js';
+import { calcProject, calcWindow, buildBom, buildCutList, packStockBars, buildGlassList } from './calc.js';
 
 const FONT_REG = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
 const FONT_BOLD = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
@@ -183,6 +183,16 @@ function drawSchemaWithDims(doc, x, y, w, h, layout, posLabel, qty) {
       } else if (code.includes('П') && !code.includes('ОЛ')) {
         doc.moveTo(xCursor + 2, yCursor + 2).lineTo(xCursor + sw - 2, cy).lineTo(xCursor + 2, yCursor + rowH - 2).stroke();
       }
+      // ── Phase 12: glass packet inner dimensions (mm)
+      const sectionWmm = (sw / innerW) * totalW;
+      const sectionHmm = (rowH / innerH) * totalH;
+      const inset = isFix ? 5 : 70;
+      const gW = Math.max(0, Math.round(sectionWmm - 2 * inset));
+      const gH = Math.max(0, Math.round(sectionHmm - 2 * inset));
+      if (gW > 0 && gH > 0 && sw > 24 && rowH > 16) {
+        doc.font('Mono').fontSize(5.5).fillColor('#1a1a1a');
+        doc.text(`${gW}×${gH}`, xCursor + 2, yCursor + rowH - 8, { width: sw - 4, align: 'center' });
+      }
       xCursor += sw + impostT;
     });
     yBoundaries.push(yCursor + rowH);
@@ -237,6 +247,164 @@ function drawSchemaWithDims(doc, x, y, w, h, layout, posLabel, qty) {
     doc.font('SansB').fontSize(8).fillColor(TEXT).text(posLabel, x, y, { width: dimGutter * 4 });
     if (qty != null) doc.font('Mono').fontSize(7).fillColor(MUTED).text(`Кол-во: ${qty}`, x, y + 10);
   }
+}
+
+// ── Phase 10: Render the Stock-bar packing page (Раскрой по хлыстам)
+function drawStockPackingPage(doc, packing, project) {
+  doc.addPage();
+  const W = doc.page.width - 80;
+  const startX = 40;
+  let y = 40;
+
+  doc.font('SansB').fontSize(16).fillColor(TEXT).text('Раскрой по хлыстам', startX, y);
+  doc.font('Mono').fontSize(9).fillColor(ACCENT).text(`хлыст ${packing.stockLength} мм · пропил ${packing.kerf} мм`, 0, y + 4, { width: doc.page.width - 40, align: 'right' });
+  doc.font('Sans').fontSize(9).fillColor(MUTED).text(
+    `Объект: ${project?.client_name || project?.name || '—'}  ·  ${packing.summary.totalStockBars} хлыстов  ·  ${packing.summary.totalLengthM} м  ·  КПД: ${packing.summary.efficiency}%`,
+    startX, y + 22);
+  y += 44;
+  doc.moveTo(startX, y).lineTo(startX + W, y).strokeColor(RULE).lineWidth(0.8).stroke();
+  y += 10;
+
+  // Color palette for cut sections per position (deterministic by posLabel)
+  const POS_COLORS = ['#b56b3a', '#3a8ab5', '#5a8a3a', '#8a3a8a', '#b5a03a', '#3ab5a0', '#b53a4d', '#5a4d8a'];
+  function posColor(posLabel) {
+    let h = 0; for (let i = 0; i < posLabel.length; i++) h = (h * 31 + posLabel.charCodeAt(i)) | 0;
+    return POS_COLORS[Math.abs(h) % POS_COLORS.length];
+  }
+
+  for (const grp of packing.perProfile) {
+    if (y > doc.page.height - 80) { doc.addPage(); y = 40; }
+    // Group header
+    doc.rect(startX, y, W, 18).fill('#faf7f1');
+    doc.font('SansB').fontSize(10).fillColor(ACCENT_DARK).text(
+      `${grp.profileName} · ${grp.profileCode}` + (grp.color ? ' · ' + grp.color : ''),
+      startX + 6, y + 5);
+    doc.font('Mono').fontSize(8).fillColor(MUTED).text(
+      `${grp.totalStockBars} хлыстов · использовано ${(grp.totalUsedMm / 1000).toFixed(2)} м · обрезков ${(grp.totalWasteMm / 1000).toFixed(2)} м · КПД ${grp.efficiency}%`,
+      0, y + 5, { width: doc.page.width - 40, align: 'right' });
+    y += 22;
+
+    // Each stock bar — drawn as a horizontal rectangle with colored cut segments
+    for (const bar of grp.bars) {
+      if (y > doc.page.height - 60) { doc.addPage(); y = 40; }
+      // Bar label
+      doc.font('Mono').fontSize(7).fillColor(MUTED).text(`Хлыст #${bar.idx}`, startX, y + 2, { width: 50 });
+      const barX = startX + 52, barY = y, barW = W - 52 - 80, barH = 16;
+      // Background bar
+      doc.rect(barX, barY, barW, barH).fillAndStroke('#fdfbf6', RULE);
+      // Cut segments
+      let cursorMm = 0;
+      bar.cuts.forEach((cut, ci) => {
+        if (ci > 0) cursorMm += packing.kerf;
+        const segX = barX + (cursorMm / packing.stockLength) * barW;
+        const segW = (cut.length / packing.stockLength) * barW;
+        doc.fillColor(posColor(cut.posLabel)).opacity(0.85).rect(segX, barY, segW, barH).fill().opacity(1);
+        // Label inside if wide enough
+        if (segW > 20) {
+          doc.font('Mono').fontSize(5.5).fillColor('#fff').text(cut.length + 'мм', segX + 1, barY + 5, { width: segW - 2, align: 'center' });
+        }
+        cursorMm += cut.length;
+      });
+      // Waste tail
+      if (bar.waste > 0) {
+        const wX = barX + (bar.used / packing.stockLength) * barW;
+        const wW = (bar.waste / packing.stockLength) * barW;
+        doc.fillColor('#d8d2c4').opacity(0.7).rect(wX, barY, wW, barH).fill().opacity(1);
+        if (wW > 20) {
+          doc.font('Mono').fontSize(5.5).fillColor(MUTED).text(`отход ${bar.waste}мм`, wX + 1, barY + 5, { width: wW - 2, align: 'center' });
+        }
+      }
+      // Right side stats
+      doc.font('Mono').fontSize(7).fillColor(TEXT).text(
+        `${bar.cuts.length} реза · ${bar.used} мм · отход ${bar.waste} мм`,
+        startX + W - 76, y + 2, { width: 80, align: 'right' });
+      y += 20;
+    }
+    y += 8;
+  }
+
+  // Grand total
+  if (y > doc.page.height - 60) { doc.addPage(); y = 40; }
+  doc.moveTo(startX + W * 0.4, y).lineTo(startX + W, y).strokeColor(TEXT).lineWidth(0.8).stroke();
+  y += 6;
+  doc.font('SansB').fontSize(11).fillColor(TEXT).text(
+    `Всего хлыстов: ${packing.summary.totalStockBars}  ·  ${packing.summary.totalLengthM} м  ·  КПД: ${packing.summary.efficiency}%`,
+    startX + W * 0.4, y);
+}
+
+// ── Phase 9: Render the Cut list page (Раскрой 1D — каждый бар к распилу)
+function drawCutListPage(doc, bars, project, items, installer) {
+  doc.addPage();
+  const W = doc.page.width - 80;
+  const startX = 40;
+  let y = 40;
+
+  doc.font('SansB').fontSize(16).fillColor(TEXT).text('Раскрой 1D — список баров', startX, y);
+  doc.font('Mono').fontSize(9).fillColor(ACCENT).text(new Date().toLocaleDateString('ru-RU'), 0, y + 4, { width: doc.page.width - 40, align: 'right' });
+  doc.font('Sans').fontSize(9).fillColor(MUTED).text('Объект: ' + (project?.client_name || project?.name || '—') + '  ·  ' + bars.length + ' баров  ·  ' + (bars.reduce((s, b) => s + b.lengthMm * b.qty, 0) / 1000).toFixed(2) + ' м', startX, y + 22);
+  y += 44;
+  doc.moveTo(startX, y).lineTo(startX + W, y).strokeColor(RULE).lineWidth(0.8).stroke();
+  y += 8;
+
+  // Group by profile code + color
+  const groups = {};
+  for (const b of bars) {
+    const k = b.profileCode + '|' + (b.color || '');
+    (groups[k] = groups[k] || { code: b.profileCode, name: b.profileName, color: b.color, bars: [] }).bars.push(b);
+  }
+  const cols = [
+    { label: '№',     x: startX + 4,        w: 22 },
+    { label: 'Поз',   x: startX + 26,       w: 38 },
+    { label: 'Деталь',x: startX + 64,       w: 130 },
+    { label: 'Длина',  x: startX + 196,     w: 50,  align: 'right', mono: true },
+    { label: 'Углы',  x: startX + 250,     w: 50,  mono: true },
+    { label: 'Кол-во', x: startX + 304,    w: 36,  align: 'right', mono: true },
+    { label: 'Σ, мм', x: startX + W - 80,  w: 80,  align: 'right', mono: true },
+  ];
+  function header() {
+    doc.rect(startX, y, W, 14).fill('#f0ece4');
+    doc.font('SansB').fontSize(7).fillColor(MUTED);
+    cols.forEach(c => doc.text(c.label, c.x, y + 4, { width: c.w, align: c.align || 'left' }));
+    y += 14;
+  }
+  function groupHeader(g) {
+    if (y > doc.page.height - 60) { doc.addPage(); y = 40; }
+    doc.rect(startX, y, W, 16).fill('#faf7f1');
+    doc.font('SansB').fontSize(9).fillColor(ACCENT_DARK).text(
+      `${g.name} · ${g.code}` + (g.color ? ' · ' + g.color : '') + ` · ${g.bars.length} баров · Σ ${(g.bars.reduce((s, b) => s + b.lengthMm * b.qty, 0) / 1000).toFixed(2)} м`,
+      startX + 6, y + 4);
+    y += 16;
+    header();
+  }
+  function row(b, idx) {
+    if (y > doc.page.height - 40) { doc.addPage(); y = 40; header(); }
+    if (idx % 2 === 1) doc.rect(startX, y, W, 12).fill('#fdfbf6');
+    doc.fillColor(TEXT);
+    doc.font('Mono').fontSize(7).text(String(idx + 1), cols[0].x, y + 3, { width: cols[0].w, align: 'left' });
+    doc.font('Mono').fontSize(7).text(b.posLabel, cols[1].x, y + 3, { width: cols[1].w });
+    doc.font('Sans').fontSize(7).text(b.role, cols[2].x, y + 3, { width: cols[2].w, ellipsis: true });
+    doc.font('Mono').fontSize(8).text(num(b.lengthMm), cols[3].x, y + 3, { width: cols[3].w, align: 'right' });
+    doc.font('Mono').fontSize(7).text(b.startAngle + '°/' + b.endAngle + '°', cols[4].x, y + 3, { width: cols[4].w });
+    doc.font('Mono').fontSize(7).text(String(b.qty), cols[5].x, y + 3, { width: cols[5].w, align: 'right' });
+    doc.font('Mono').fontSize(8).fillColor(ACCENT_DARK).text(num(b.lengthMm * b.qty), cols[6].x, y + 3, { width: cols[6].w, align: 'right' });
+    y += 12;
+  }
+
+  Object.values(groups).forEach(g => {
+    groupHeader(g);
+    g.bars.forEach((b, i) => row(b, i));
+    y += 4;
+  });
+
+  // Grand total
+  if (y > doc.page.height - 40) { doc.addPage(); y = 40; }
+  y += 4;
+  doc.moveTo(startX + W * 0.55, y).lineTo(startX + W, y).strokeColor(TEXT).lineWidth(0.8).stroke();
+  y += 4;
+  doc.font('SansB').fontSize(10).fillColor(TEXT).text('ВСЕГО баров: ' + bars.length, startX + W * 0.55, y);
+  doc.font('SansB').fontSize(10).fillColor(ACCENT_DARK).text(
+    'Σ ' + (bars.reduce((s, b) => s + b.lengthMm * b.qty, 0) / 1000).toFixed(2) + ' м',
+    0, y, { width: doc.page.width - 40, align: 'right' });
 }
 
 // ── Phase 4: Render the BOM page (Logikal-style materials list)
@@ -522,6 +690,25 @@ export function buildKpPdf(kp, project, calc, installer) {
     startX, y, { width: W, align: 'left' },
   );
 
+  // ── Phase 9: append Cut list (Раскрой 1D) page
+  let cutBarsForPacking = null;
+  try {
+    const cutBars = buildCutList(items);
+    cutBarsForPacking = cutBars;
+    if (cutBars.length) drawCutListPage(doc, cutBars, project, items, installer);
+  } catch (e) {
+    console.error('Cut list page generation failed:', e.message);
+  }
+  // ── Phase 10: append Stock-bar packing page
+  try {
+    if (cutBarsForPacking && cutBarsForPacking.length) {
+      const packing = packStockBars(cutBarsForPacking);
+      drawStockPackingPage(doc, packing, project);
+    }
+  } catch (e) {
+    console.error('Stock-bar packing page generation failed:', e.message);
+  }
+
   // ── Phase 4: append BOM (Список материалов) page — Logikal-style
   try {
     // Aggregate all priced lines across items × qty, then merge identical SKUs.
@@ -562,6 +749,167 @@ export function buildKpPdf(kp, project, calc, installer) {
     // never block KP rendering on BOM failure
     console.error('BOM page generation failed:', e.message);
   }
+
+  return doc;
+}
+
+// ── Phase 15: Single-position КП (КП по одной позиции отдельно)
+export function buildSingleItemKpPdf(project, item, idx, installer) {
+  const synthKp = {
+    number: (project.order_number || 'XXXX') + '/' + String(idx + 1).padStart(3, '0'),
+    client_name: project.client_name, client_address: project.client_address,
+    client_phone: project.client_phone, total: 0,
+  };
+  // Strip project to a single-item project clone so existing buildKpPdf logic works
+  const singleProject = { ...project, items: JSON.stringify([item]) };
+  return buildKpPdf(synthKp, singleProject, null, installer);
+}
+
+// ── Phase 15: Glass spec PDF (спецификация стеклопакетов для стекольного цеха)
+export function buildGlassSpecPdf(project, installer) {
+  const doc = new PDFDocument({ size: 'A4', margin: 40, info: {
+    Title: 'Спецификация стеклопакетов', Author: installer?.name || 'PLUR Solutions',
+  } });
+  if (fs.existsSync(FONT_REG))  doc.registerFont('Sans',  FONT_REG);
+  if (fs.existsSync(FONT_BOLD)) doc.registerFont('SansB', FONT_BOLD);
+  if (fs.existsSync(FONT_MONO)) doc.registerFont('Mono',  FONT_MONO);
+  doc.font('Sans');
+  const W = doc.page.width - 80, startX = 40;
+  let y = 40;
+
+  doc.font('SansB').fontSize(16).fillColor(TEXT).text('Спецификация стеклопакетов', startX, y);
+  doc.font('Mono').fontSize(9).fillColor(ACCENT).text(new Date().toLocaleDateString('ru-RU'), 0, y + 4, { width: doc.page.width - 40, align: 'right' });
+  doc.font('Sans').fontSize(9).fillColor(MUTED).text('Объект: ' + (project?.client_name || project?.name || '—') + '  ·  Ответственный: ' + (installer?.name || 'PLUR Solutions'), startX, y + 22);
+  y += 44;
+  doc.moveTo(startX, y).lineTo(startX + W, y).strokeColor(RULE).lineWidth(0.8).stroke();
+  y += 8;
+
+  const items = JSON.parse(project.items || '[]');
+  const glasses = buildGlassList(items);
+  // Group identical sizes
+  const groups = {};
+  for (const g of glasses) {
+    const k = `${g.widthMm}×${g.heightMm}|${g.formula}`;
+    if (groups[k]) { groups[k].qty += g.qty; groups[k].positions.push(g.posLabel); }
+    else groups[k] = { ...g, positions: [g.posLabel] };
+  }
+  const rows = Object.values(groups);
+  rows.sort((a, b) => (b.widthMm * b.heightMm) - (a.widthMm * a.heightMm));
+
+  const cols = [
+    { l: '№',          x: startX + 4,        w: 24 },
+    { l: 'Размер, мм', x: startX + 30,       w: 110, mono: true },
+    { l: 'Формула',    x: startX + 142,      w: 120, mono: true },
+    { l: 'Площ., м²',  x: startX + 264,      w: 60,  mono: true, align: 'right' },
+    { l: 'Кол-во',     x: startX + 326,      w: 50,  mono: true, align: 'right' },
+    { l: 'Σ м²',       x: startX + W - 110,  w: 50,  mono: true, align: 'right' },
+    { l: 'Позиции',    x: startX + W - 56,   w: 56 },
+  ];
+  doc.rect(startX, y, W, 16).fill('#f0ece4');
+  doc.font('SansB').fontSize(8).fillColor(MUTED);
+  cols.forEach(c => doc.text(c.l, c.x, y + 5, { width: c.w, align: c.align || 'left' }));
+  y += 16;
+
+  rows.forEach((g, idx) => {
+    if (y > doc.page.height - 60) { doc.addPage(); y = 40; }
+    if (idx % 2 === 0) doc.rect(startX, y, W, 14).fill('#fdfbf6');
+    doc.fillColor(TEXT);
+    doc.font('Mono').fontSize(8).text(String(idx + 1), cols[0].x, y + 4, { width: cols[0].w, align: 'left' });
+    doc.font('Mono').fontSize(9).fillColor(TEXT).text(`${g.widthMm} × ${g.heightMm}`, cols[1].x, y + 4, { width: cols[1].w });
+    doc.font('Mono').fontSize(8).text(g.formula, cols[2].x, y + 4, { width: cols[2].w });
+    doc.font('Mono').fontSize(8).text(g.areaM2.toFixed(3), cols[3].x, y + 4, { width: cols[3].w, align: 'right' });
+    doc.font('Mono').fontSize(8).text(String(g.qty), cols[4].x, y + 4, { width: cols[4].w, align: 'right' });
+    doc.font('Mono').fontSize(8).fillColor(ACCENT_DARK).text((g.areaM2 * g.qty).toFixed(3), cols[5].x, y + 4, { width: cols[5].w, align: 'right' });
+    doc.font('Mono').fontSize(7).fillColor(MUTED).text([...new Set(g.positions)].join(', '), cols[6].x, y + 4, { width: cols[6].w, ellipsis: true });
+    y += 14;
+  });
+
+  if (y > doc.page.height - 50) { doc.addPage(); y = 40; }
+  y += 6;
+  doc.moveTo(startX + W * 0.55, y).lineTo(startX + W, y).strokeColor(TEXT).lineWidth(0.8).stroke();
+  y += 6;
+  const totalCount = rows.reduce((s, g) => s + g.qty, 0);
+  const totalArea = +rows.reduce((s, g) => s + g.areaM2 * g.qty, 0).toFixed(3);
+  doc.font('SansB').fontSize(11).fillColor(TEXT).text(`Всего пакетов: ${totalCount}  ·  Σ ${totalArea} м²`, startX + W * 0.55, y);
+  return doc;
+}
+
+// ── Phase 15: Hardware spec PDF (спецификация фурнитуры — отдельный отчёт)
+export function buildHardwareSpecPdf(project, installer) {
+  const doc = new PDFDocument({ size: 'A4', margin: 40, info: {
+    Title: 'Спецификация фурнитуры', Author: installer?.name || 'PLUR Solutions',
+  } });
+  if (fs.existsSync(FONT_REG))  doc.registerFont('Sans',  FONT_REG);
+  if (fs.existsSync(FONT_BOLD)) doc.registerFont('SansB', FONT_BOLD);
+  if (fs.existsSync(FONT_MONO)) doc.registerFont('Mono',  FONT_MONO);
+  doc.font('Sans');
+  const W = doc.page.width - 80, startX = 40;
+  let y = 40;
+
+  doc.font('SansB').fontSize(16).fillColor(TEXT).text('Спецификация фурнитуры', startX, y);
+  doc.font('Mono').fontSize(9).fillColor(ACCENT).text(new Date().toLocaleDateString('ru-RU'), 0, y + 4, { width: doc.page.width - 40, align: 'right' });
+  doc.font('Sans').fontSize(9).fillColor(MUTED).text('Объект: ' + (project?.client_name || project?.name || '—'), startX, y + 22);
+  y += 44;
+  doc.moveTo(startX, y).lineTo(startX + W, y).strokeColor(RULE).lineWidth(0.8).stroke();
+  y += 8;
+
+  // Aggregate hardware lines from all items
+  const items = JSON.parse(project.items || '[]');
+  const aggregate = [];
+  items.forEach(it => {
+    const c = calcWindow({
+      layout: it.layout, glazingId: it.glazingId, systemId: it.systemId,
+      manufacturerId: project.manufacturer_id, installerId: project.installer_id,
+      priceLevel: 'dealer',
+      extras: it.extras, colorId: it.colorId, hardwareKitId: it.hardwareKitId,
+      handleId: it.handleId, handleColorId: it.handleColorId, doorKit: it.doorKit,
+      doorTypeId: it.doorTypeId, turnProfile: it.turnProfile, frameAdapter: it.frameAdapter,
+    });
+    const itQty = it.qty || 1;
+    c.lines.filter(l => l.category === 'hardware').forEach(ln => aggregate.push({
+      ...ln, qtyNum: ln.qtyNum * itQty, price: ln.price * itQty,
+    }));
+  });
+  // merge identical
+  const merged = {};
+  for (const ln of aggregate) {
+    const k = ln.article + '|' + ln.label;
+    if (merged[k]) { merged[k].qtyNum += ln.qtyNum; merged[k].price += ln.price; }
+    else merged[k] = { ...ln };
+  }
+  const rows = Object.values(merged).sort((a, b) => b.price - a.price);
+
+  doc.rect(startX, y, W, 16).fill('#f0ece4');
+  doc.font('SansB').fontSize(8).fillColor(MUTED);
+  doc.text('№',         startX + 4,  y + 5, { width: 24 });
+  doc.text('Артикул',   startX + 30, y + 5, { width: 80 });
+  doc.text('Наименование', startX + 112, y + 5, { width: W - 280 });
+  doc.text('Кол-во',    startX + W - 158, y + 5, { width: 50, align: 'right' });
+  doc.text('Цена',      startX + W - 105, y + 5, { width: 50, align: 'right' });
+  doc.text('Сумма, ₸',  startX + W - 50,  y + 5, { width: 50, align: 'right' });
+  y += 16;
+
+  let total = 0;
+  rows.forEach((r, idx) => {
+    if (y > doc.page.height - 60) { doc.addPage(); y = 40; }
+    if (idx % 2 === 0) doc.rect(startX, y, W, 14).fill('#fdfbf6');
+    doc.fillColor(TEXT);
+    doc.font('Mono').fontSize(8).text(String(idx + 1), startX + 4, y + 4, { width: 24 });
+    doc.font('Mono').fontSize(8).text(r.article || '—', startX + 30, y + 4, { width: 80, ellipsis: true });
+    doc.font('Sans').fontSize(8).text(r.label || '', startX + 112, y + 4, { width: W - 280, ellipsis: true });
+    doc.font('Mono').fontSize(8).text(num(r.qtyNum) + ' ' + (r.unit || ''), startX + W - 158, y + 4, { width: 50, align: 'right' });
+    doc.font('Mono').fontSize(8).fillColor(MUTED).text(num(r.unitPrice), startX + W - 105, y + 4, { width: 50, align: 'right' });
+    doc.font('Mono').fontSize(8).fillColor(TEXT).text(num(r.price), startX + W - 50, y + 4, { width: 50, align: 'right' });
+    total += r.price;
+    y += 14;
+  });
+
+  if (y > doc.page.height - 40) { doc.addPage(); y = 40; }
+  y += 6;
+  doc.moveTo(startX + W * 0.6, y).lineTo(startX + W, y).strokeColor(TEXT).lineWidth(0.8).stroke();
+  y += 6;
+  doc.font('SansB').fontSize(12).fillColor(TEXT).text('ИТОГО фурнитура:', startX + W * 0.6, y);
+  doc.font('SansB').fontSize(13).fillColor(ACCENT_DARK).text(num(total) + ' ₸', 0, y - 1, { width: doc.page.width - 40, align: 'right' });
 
   return doc;
 }

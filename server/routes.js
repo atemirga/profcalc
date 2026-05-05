@@ -1,9 +1,9 @@
 // server/routes.js — REST API for admin + mini-app
 import express from 'express';
 import db, { logEvent } from './db.js';
-import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom, buildCutList } from './calc.js';
+import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom, buildCutList, packStockBars, buildGlassList } from './calc.js';
 import { verifyInitData } from './telegram-auth.js';
-import { buildKpPdf, buildInvoicePdf } from './pdf.js';
+import { buildKpPdf, buildInvoicePdf, buildSingleItemKpPdf, buildGlassSpecPdf, buildHardwareSpecPdf } from './pdf.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8674981496:AAFCDyX7K_oW9WvHO36Mo8cSadeUSeIIkbI';
 
@@ -608,6 +608,120 @@ api.get('/projects/:id/invoice.pdf', (req, res) => {
     console.error('Invoice PDF error:', e);
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
+});
+
+// ── Phase 15: report index — list all available report URLs for a project
+api.get('/projects/:id/reports', (req, res) => {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const items = JSON.parse(row.items);
+  const base = `/api/projects/${row.id}`;
+  const reports = [
+    { id: 'kp',       title: 'Общий КП (со спецификацией, раскроем 1D, хлыстами)', url: `/api/kp/${row.id}.pdf`, kind: 'pdf', requiresKp: true },
+    { id: 'invoice',  title: 'Заявка-накладная',           url: `${base}/invoice.pdf`, kind: 'pdf' },
+    { id: 'glass',    title: 'Спецификация стеклопакетов', url: `${base}/glass-spec.pdf`, kind: 'pdf' },
+    { id: 'hardware', title: 'Спецификация фурнитуры',     url: `${base}/hardware-spec.pdf`, kind: 'pdf' },
+    { id: 'cutlist',  title: 'Раскрой 1D (JSON)',          url: `${base}/cutlist`, kind: 'json' },
+    { id: 'stock',    title: 'Раскрой по хлыстам (JSON)',  url: `${base}/stock-bars?stock=6500&kerf=4`, kind: 'json' },
+    { id: 'glass-json', title: 'Стеклопакеты (JSON)',     url: `${base}/glass`, kind: 'json' },
+    { id: 'bom',      title: 'Список материалов (JSON)',   url: `${base}/bom`, kind: 'json' },
+  ];
+  // Per-position КП reports
+  items.forEach((it, idx) => {
+    reports.push({
+      id: `kp-pos-${idx + 1}`,
+      title: `КП по позиции ${String(idx + 1).padStart(3, '0')} (${it.name || ''})`,
+      url: `${base}/items/${idx}/kp.pdf`,
+      kind: 'pdf',
+    });
+  });
+  res.json({ projectId: row.id, reports });
+});
+
+// ── Phase 15: per-item КП PDF
+api.get('/projects/:id/items/:idx/kp.pdf', (req, res) => {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).send('not found');
+  const items = JSON.parse(project.items || '[]');
+  const idx = parseInt(req.params.idx, 10);
+  if (idx < 0 || idx >= items.length) return res.status(404).send('item not found');
+  const item = items[idx];
+  const installer = project.installer_id ? db.prepare('SELECT * FROM installers WHERE id = ?').get(project.installer_id) : null;
+  const inst = installer || { name: 'PLUR Solutions', city: 'Алматы' };
+  try {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="kp-${project.id}-pos-${idx + 1}.pdf"`);
+    const doc = buildSingleItemKpPdf(project, item, idx, inst);
+    doc.pipe(res); doc.end();
+  } catch (e) {
+    console.error('Per-item KP PDF error:', e);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Phase 15: Glass spec PDF
+api.get('/projects/:id/glass-spec.pdf', (req, res) => {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).send('not found');
+  const installer = project.installer_id ? db.prepare('SELECT * FROM installers WHERE id = ?').get(project.installer_id) : null;
+  try {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="glass-spec-${project.id}.pdf"`);
+    const doc = buildGlassSpecPdf(project, installer || { name: 'PLUR Solutions' });
+    doc.pipe(res); doc.end();
+  } catch (e) {
+    console.error('Glass spec PDF error:', e);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Phase 15: Hardware spec PDF
+api.get('/projects/:id/hardware-spec.pdf', (req, res) => {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).send('not found');
+  const installer = project.installer_id ? db.prepare('SELECT * FROM installers WHERE id = ?').get(project.installer_id) : null;
+  try {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="hardware-spec-${project.id}.pdf"`);
+    const doc = buildHardwareSpecPdf(project, installer || { name: 'PLUR Solutions' });
+    doc.pipe(res); doc.end();
+  } catch (e) {
+    console.error('Hardware spec PDF error:', e);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Phase 10: stock-bar packing (раскрой по хлыстам) ───────────────────
+api.get('/projects/:id/stock-bars', (req, res) => {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const items = JSON.parse(row.items);
+  const stockLength = parseInt(req.query.stock, 10) || 6500;
+  const kerf = parseInt(req.query.kerf, 10);
+  const cutBars = buildCutList(items);
+  const packing = packStockBars(cutBars, { stockLength, kerf: Number.isFinite(kerf) ? kerf : 4 });
+  res.json(packing);
+});
+
+// ── Phase 12: glass packets list (per-section size) ────────────────────
+api.get('/projects/:id/glass', (req, res) => {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const items = JSON.parse(row.items);
+  const glasses = buildGlassList(items);
+  // Group identical sizes
+  const groups = {};
+  for (const g of glasses) {
+    const k = `${g.widthMm}×${g.heightMm}|${g.formula}`;
+    if (groups[k]) { groups[k].qty += g.qty; groups[k].positions.push(g.posLabel); }
+    else groups[k] = { ...g, positions: [g.posLabel] };
+  }
+  res.json({
+    projectId: row.id,
+    glasses, groups: Object.values(groups),
+    totalCount: glasses.reduce((s, g) => s + g.qty, 0),
+    totalArea: +glasses.reduce((s, g) => s + g.areaM2 * g.qty, 0).toFixed(3),
+  });
 });
 
 // ── Phase 8: Cut list (1D раскрой) for a saved project ─────────────────
