@@ -554,11 +554,32 @@ export function calcWindow(input) {
     if (effectiveDoorWidth > 0) dhLine(dhRow(selected.thresholdId), effectiveDoorWidth);
   }
 
-  // Reinforcement (steel inside profiles) — Phase 7: scaled by door type factor
+  // Reinforcement (steel inside profiles) — Phase 7+27-29: skip for aluminum/wood
   const reinfFactor = doorType ? Number(doorType.reinforcement_factor) || 1.0 : 1.0;
-  const reinfLen = (framePerim + totalMullion + sashPerimTotal * 0.6) * reinfFactor;
-  const reinfTag = doorType && reinfFactor !== 1.0 ? ` (${doorType.name}, ×${reinfFactor})` : '';
-  allLines.push(tag(line('Армирование оцинк. сталь 1.5 мм' + reinfTag, reinfLen, 'м', art('REINF-1.5'), priceLevel), 'reinforcement'));
+  const needsReinf = sys.needs_reinforcement !== 0;
+  if (needsReinf) {
+    const reinfLen = (framePerim + totalMullion + sashPerimTotal * 0.6) * reinfFactor;
+    const reinfTag = doorType && reinfFactor !== 1.0 ? ` (${doorType.name}, ×${reinfFactor})` : '';
+    allLines.push(tag(line('Армирование оцинк. сталь 1.5 мм' + reinfTag, reinfLen, 'м', art('REINF-1.5'), priceLevel), 'reinforcement'));
+  } else if (sys.material_type === 'aluminum_warm') {
+    // Tёплый алюминий — нужен термомост (полиамидная вставка)
+    const tbLen = framePerim + totalMullion + sashPerimTotal;
+    const tbPrice = Math.round(280 * priceMultiplier(priceLevel));
+    allLines.push(tag({
+      label: `Термомост полиамидный (для тёплого алюминия)`,
+      qty: tbLen.toFixed(2) + ' м', qtyNum: +tbLen.toFixed(2), unit: 'м',
+      article: 'TBR-AL', unitPrice: tbPrice, price: Math.round(tbLen * tbPrice),
+    }, 'reinforcement'));
+  } else if (sys.material_type === 'wood' || sys.material_type === 'wood_aluminum') {
+    // Деревянным окнам нужно лаковое покрытие (за м² поверхности профиля)
+    const surfaceArea = (framePerim + totalMullion + sashPerimTotal) * 0.4;  // ~400mm развёртка профиля
+    const lacquerPrice = Math.round(450 * priceMultiplier(priceLevel));
+    allLines.push(tag({
+      label: 'Лак для дерева (3 слоя)',
+      qty: surfaceArea.toFixed(2) + ' м²', qtyNum: +surfaceArea.toFixed(2), unit: 'м²',
+      article: 'LACQUER-3X', unitPrice: lacquerPrice, price: Math.round(surfaceArea * lacquerPrice),
+    }, 'consumables'));
+  }
 
   // ── Phase 3: typed seals — CON 01/02/05/07-4/11-4 (Logikal-style)
   function sealLine(code, length) {

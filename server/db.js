@@ -20,7 +20,11 @@ CREATE TABLE IF NOT EXISTS profile_systems (
   vendor TEXT NOT NULL,
   chambers INTEGER NOT NULL,
   depth INTEGER NOT NULL,
-  material TEXT NOT NULL
+  material TEXT NOT NULL,
+  material_type TEXT NOT NULL DEFAULT 'pvc',  -- pvc | aluminum_warm | aluminum_cold | wood | wood_aluminum
+  needs_reinforcement INTEGER NOT NULL DEFAULT 1,  -- 0 для алюминия и дерева (само по себе несущее)
+  thermal_break INTEGER NOT NULL DEFAULT 0,        -- 1 для тёплых алюминия (изолятор внутри)
+  density_factor REAL NOT NULL DEFAULT 1.0         -- для веса/расчёта расходов
 );
 
 CREATE TABLE IF NOT EXISTS glazing (
@@ -124,30 +128,60 @@ function isEmpty(table) {
 }
 
 if (isEmpty('profile_systems')) {
-  const ins = db.prepare(`INSERT INTO profile_systems (id,name,vendor,chambers,depth,material) VALUES (?,?,?,?,?,?)`);
+  const ins = db.prepare(`INSERT INTO profile_systems (id,name,vendor,chambers,depth,material,material_type,needs_reinforcement,thermal_break,density_factor) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  const pvc = (id, name, vendor, ch, dep) => [id, name, vendor, ch, dep, 'ПВХ', 'pvc', 1, 0, 1.0];
+  const alW = (id, name, vendor, ch, dep) => [id, name, vendor, ch, dep, 'Алюминий теплый',  'aluminum_warm', 0, 1, 2.7];
+  const alC = (id, name, vendor, ch, dep) => [id, name, vendor, ch, dep, 'Алюминий холодный','aluminum_cold', 0, 0, 2.7];
+  const wood = (id, name, vendor, ch, dep) => [id, name, vendor, ch, dep, 'Дерево',           'wood',          0, 0, 0.7];
+  const woodAl = (id, name, vendor, ch, dep) => [id, name, vendor, ch, dep, 'Дерево-алюминий', 'wood_aluminum', 0, 1, 1.4];
   const seeds = [
-    ['rehau-delight-70', 'Rehau Delight 70', 'Rehau', 5, 70, 'ПВХ'],
-    ['rehau-grazio-70',  'Rehau Grazio 70',  'Rehau', 5, 70, 'ПВХ'],
-    ['kbe-70-expert',    'KBE 70 Expert',    'KBE',   5, 70, 'ПВХ'],
-    ['veka-softline-82', 'VEKA Softline 82', 'VEKA',  7, 82, 'ПВХ'],
-    ['salamander-82',    'Salamander bluEvolution 82', 'Salamander', 6, 82, 'ПВХ'],
-    ['lm-2138-55',       'LM-2138 (55 серия)','LM',    5, 55, 'ПВХ'],
-    // ── Phase 20: extended PVC profile catalog
-    ['rehau-brillant-70','Rehau Brillant 70','Rehau',   5, 70, 'ПВХ'],
-    ['rehau-geneo-86',   'Rehau Geneo 86',   'Rehau',   6, 86, 'ПВХ'],
-    ['rehau-synego-80',  'Rehau Synego 80',  'Rehau',   7, 80, 'ПВХ'],
-    ['veka-softline-70', 'VEKA Softline 70', 'VEKA',    5, 70, 'ПВХ'],
-    ['veka-topline',     'VEKA Topline 75',  'VEKA',    6, 75, 'ПВХ'],
-    ['veka-alphaline-90','VEKA Alphaline 90','VEKA',    8, 90, 'ПВХ'],
-    ['kbe-76-master',    'KBE 76 Master',    'KBE',     6, 76, 'ПВХ'],
-    ['kbe-88-engelberg', 'KBE 88 Engelberg', 'KBE',     7, 88, 'ПВХ'],
-    ['salamander-streamline-76','Salamander StreamLine 76','Salamander', 5, 76, 'ПВХ'],
-    ['salamander-blu-92','Salamander bluEvolution 92','Salamander',7, 92, 'ПВХ'],
-    ['schueco-living-82','Schueco LivIng 82','Schueco',  6, 82, 'ПВХ'],
-    ['aluplast-ideal-7000','Aluplast IDEAL 7000','Aluplast',6, 70, 'ПВХ'],
-    ['aluplast-ideal-8000','Aluplast IDEAL 8000','Aluplast',7, 85, 'ПВХ'],
-    ['trocal-innonova-76','Trocal InnoNova 76','Trocal', 6, 76, 'ПВХ'],
-    ['decor-line-70',    'DecorLine 70',     'Decor (KZ)',5, 70, 'ПВХ'],
+    pvc('rehau-delight-70', 'Rehau Delight 70', 'Rehau', 5, 70),
+    pvc('rehau-grazio-70',  'Rehau Grazio 70',  'Rehau', 5, 70),
+    pvc('kbe-70-expert',    'KBE 70 Expert',    'KBE',   5, 70),
+    pvc('veka-softline-82', 'VEKA Softline 82', 'VEKA',  7, 82),
+    pvc('salamander-82',    'Salamander bluEvolution 82', 'Salamander', 6, 82),
+    pvc('lm-2138-55',       'LM-2138 (55 серия)','LM',    5, 55),
+    // ── Phase 20: extended PVC catalog
+    pvc('rehau-brillant-70','Rehau Brillant 70','Rehau',   5, 70),
+    pvc('rehau-geneo-86',   'Rehau Geneo 86',   'Rehau',   6, 86),
+    pvc('rehau-synego-80',  'Rehau Synego 80',  'Rehau',   7, 80),
+    pvc('veka-softline-70', 'VEKA Softline 70', 'VEKA',    5, 70),
+    pvc('veka-topline',     'VEKA Topline 75',  'VEKA',    6, 75),
+    pvc('veka-alphaline-90','VEKA Alphaline 90','VEKA',    8, 90),
+    pvc('kbe-76-master',    'KBE 76 Master',    'KBE',     6, 76),
+    pvc('kbe-88-engelberg', 'KBE 88 Engelberg', 'KBE',     7, 88),
+    pvc('salamander-streamline-76','Salamander StreamLine 76','Salamander', 5, 76),
+    pvc('salamander-blu-92','Salamander bluEvolution 92','Salamander',7, 92),
+    pvc('schueco-living-82','Schueco LivIng 82','Schueco',  6, 82),
+    pvc('aluplast-ideal-7000','Aluplast IDEAL 7000','Aluplast',6, 70),
+    pvc('aluplast-ideal-8000','Aluplast IDEAL 8000','Aluplast',7, 85),
+    pvc('trocal-innonova-76','Trocal InnoNova 76','Trocal', 6, 76),
+    pvc('decor-line-70',    'DecorLine 70',     'Decor (KZ)',5, 70),
+    // ── Phase 27: aluminum systems
+    // Тёплый алюминий (с термомостом, для жилых)
+    alW('schueco-aws-70',   'Schueco AWS 70.HI', 'Schueco',  3, 70),
+    alW('schueco-aws-75',   'Schueco AWS 75.SI+','Schueco',  3, 75),
+    alW('schueco-aws-90',   'Schueco AWS 90 SI+','Schueco',  3, 90),
+    alW('reynaers-master',  'Reynaers MasterLine 8','Reynaers', 3, 77),
+    alW('alutech-w72',      'Alutech W72',       'Alutech',   3, 72),
+    alW('alutech-w62',      'Alutech W62',       'Alutech',   3, 62),
+    // Холодный алюминий (без термомоста, для веранд/нежилых)
+    alC('provedal-c40',     'Provedal C40',      'Provedal',  1, 40),
+    alC('provedal-p40',     'Provedal P40',      'Provedal',  1, 40),
+    alC('tatprof-tp50',     'Tatprof ТП-50',     'Tatprof',   1, 50),
+    alC('alutech-alt-c48',  'Alutech ALT C48',   'Alutech',   1, 48),
+    // ── Phase 28: wood systems (eurobrus)
+    wood('wood-eu-68-pine',  'Евробрус 68 (сосна)',     'Дерево', 1, 68),
+    wood('wood-eu-78-pine',  'Евробрус 78 (сосна)',     'Дерево', 1, 78),
+    wood('wood-eu-86-pine',  'Евробрус 86 (сосна)',     'Дерево', 1, 86),
+    wood('wood-eu-78-oak',   'Евробрус 78 (дуб)',        'Дерево', 1, 78),
+    wood('wood-eu-86-oak',   'Евробрус 86 (дуб)',        'Дерево', 1, 86),
+    wood('wood-eu-78-larch', 'Евробрус 78 (лиственница)','Дерево', 1, 78),
+    wood('wood-eu-86-meranti','Евробрус 86 (меранти)',  'Дерево', 1, 86),
+    // ── Phase 29: wood-aluminum hybrid
+    woodAl('hybrid-internorm-hf410','Internorm HF410',  'Internorm', 3, 90),
+    woodAl('hybrid-schueco-aws',    'Schueco AWS Wood', 'Schueco',   3, 90),
+    woodAl('hybrid-werker-w400',    'Werker W400',      'Werker',    2, 86),
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -198,6 +232,14 @@ try {
   if (!cols.includes('role')) {
     db.exec("ALTER TABLE installers ADD COLUMN role TEXT NOT NULL DEFAULT 'okonshchik'");
   }
+} catch {}
+// ── Phase 27-29: profile_systems extended fields (aluminum/wood support)
+try {
+  const cols = db.prepare("PRAGMA table_info(profile_systems)").all().map(c => c.name);
+  if (!cols.includes('material_type'))       db.exec("ALTER TABLE profile_systems ADD COLUMN material_type TEXT NOT NULL DEFAULT 'pvc'");
+  if (!cols.includes('needs_reinforcement')) db.exec("ALTER TABLE profile_systems ADD COLUMN needs_reinforcement INTEGER NOT NULL DEFAULT 1");
+  if (!cols.includes('thermal_break'))       db.exec("ALTER TABLE profile_systems ADD COLUMN thermal_break INTEGER NOT NULL DEFAULT 0");
+  if (!cols.includes('density_factor'))      db.exec("ALTER TABLE profile_systems ADD COLUMN density_factor REAL NOT NULL DEFAULT 1.0");
 } catch {}
 try {
   const cols = db.prepare("PRAGMA table_info(calculations)").all().map(c => c.name);
@@ -701,6 +743,51 @@ if (isEmpty('profile_parts')) {
       [`pp-${sid}-sash`,  sid, 'sash',    `${sid.toUpperCase()}-SASH`,  76, 1.5, sid + ' створка',   sp],
       [`pp-${sid}-mull`,  sid, 'mullion', `${sid.toUpperCase()}-MULL`,  82, 1.5, sid + ' импост',    mp],
       [`pp-${sid}-bead`,  sid, 'bead',    `${sid.toUpperCase()}-BEAD`,  20, null, sid + ' штапик',   bp],
+    ]),
+    // ── Phase 27: aluminum systems profile_parts (warm + cold)
+    ...[
+      // [system_id, frame_price, sash_price, mullion_price, bead_price]
+      ['schueco-aws-70',   12500, 14800, 13500, 1800],   // тёплый премиум
+      ['schueco-aws-75',   13800, 16400, 14900, 1850],
+      ['schueco-aws-90',   16200, 19400, 17500, 1900],   // топ
+      ['reynaers-master',  12800, 15300, 13900, 1820],
+      ['alutech-w72',      9800,  11600, 10600, 1400],   // российский тёплый
+      ['alutech-w62',      8400,  9900,  9100, 1300],
+      ['provedal-c40',     2800,  3300,  3000,  640],    // холодный — дешёвый
+      ['provedal-p40',     2900,  3400,  3100,  650],
+      ['tatprof-tp50',     3400,  4000,  3700,  720],
+      ['alutech-alt-c48',  3100,  3700,  3400,  680],
+    ].flatMap(([sid, fp, sp, mp, bp]) => [
+      [`pp-${sid}-frame`, sid, 'frame',   `${sid.toUpperCase()}-AL-F`, 75, 1.7, sid + ' рама ал.',  fp],
+      [`pp-${sid}-sash`,  sid, 'sash',    `${sid.toUpperCase()}-AL-S`, 80, 1.7, sid + ' створка ал.',sp],
+      [`pp-${sid}-mull`,  sid, 'mullion', `${sid.toUpperCase()}-AL-M`, 88, 1.7, sid + ' импост ал.', mp],
+      [`pp-${sid}-bead`,  sid, 'bead',    `${sid.toUpperCase()}-AL-B`, 22, null, sid + ' штапик ал.',bp],
+    ]),
+    // ── Phase 28: wood systems profile_parts
+    ...[
+      ['wood-eu-68-pine',   8400,  9900,  9100, 1100],
+      ['wood-eu-78-pine',   9800,  11600, 10600, 1200],
+      ['wood-eu-86-pine',   11200, 13300, 12100, 1300],
+      ['wood-eu-78-oak',    18400, 21800, 19900, 2100],   // дуб премиум
+      ['wood-eu-86-oak',    21000, 24900, 22700, 2300],
+      ['wood-eu-78-larch',  14000, 16600, 15100, 1700],   // лиственница
+      ['wood-eu-86-meranti',16800, 19900, 18100, 2000],   // меранти (экзотика)
+    ].flatMap(([sid, fp, sp, mp, bp]) => [
+      [`pp-${sid}-frame`, sid, 'frame',   `${sid.toUpperCase()}-W-F`, 78, null, sid + ' рама дер.',  fp],
+      [`pp-${sid}-sash`,  sid, 'sash',    `${sid.toUpperCase()}-W-S`, 82, null, sid + ' створка дер.',sp],
+      [`pp-${sid}-mull`,  sid, 'mullion', `${sid.toUpperCase()}-W-M`, 78, null, sid + ' импост дер.',mp],
+      [`pp-${sid}-bead`,  sid, 'bead',    `${sid.toUpperCase()}-W-B`, 24, null, sid + ' штапик дер.',bp],
+    ]),
+    // ── Phase 29: wood-aluminum hybrid (most expensive)
+    ...[
+      ['hybrid-internorm-hf410', 32000, 38000, 34800, 3200],
+      ['hybrid-schueco-aws',     30000, 35600, 32600, 3000],
+      ['hybrid-werker-w400',     27000, 32100, 29400, 2800],
+    ].flatMap(([sid, fp, sp, mp, bp]) => [
+      [`pp-${sid}-frame`, sid, 'frame',   `${sid.toUpperCase()}-WA-F`, 90, null, sid + ' рама дер-ал.',  fp],
+      [`pp-${sid}-sash`,  sid, 'sash',    `${sid.toUpperCase()}-WA-S`, 92, null, sid + ' створка дер-ал.',sp],
+      [`pp-${sid}-mull`,  sid, 'mullion', `${sid.toUpperCase()}-WA-M`, 90, null, sid + ' импост дер-ал.',mp],
+      [`pp-${sid}-bead`,  sid, 'bead',    `${sid.toUpperCase()}-WA-B`, 26, null, sid + ' штапик дер-ал.',bp],
     ]),
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));

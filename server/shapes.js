@@ -273,6 +273,35 @@ export function shapePolygon({ vertices = [] }) {
   };
 }
 
+// ── Bay window (эркер) — multi-panel angled construction ────────────
+// Returns geometry equivalent to N panels joined at angle. Useful for cost calc.
+// panels = 3 (центр + 2 боковые), 5 (центр + 4 боковые), angle = 90/120/135
+export function shapeBay({ width: w, height: h, panels = 3, angle = 135 }) {
+  // Total perimeter sum across all panels (each panel as a separate frame on its side)
+  // Simplified: each panel ~ w/panels wide, full height; outer perimeter = 2h*panels + 2 * total_width
+  const panelW = w / panels;
+  const totalPerim = 2 * h * panels + 2 * w; // outer perim
+  // Glass area: each panel is a rectangle of panelW × h
+  const glassArea = w * h;
+  const bars = [];
+  for (let i = 0; i < panels; i++) {
+    bars.push({ kind: 'straight', role: `Панель ${i + 1} верх`, length: panelW, angles: [angle / 2, angle / 2] });
+    bars.push({ kind: 'straight', role: `Панель ${i + 1} низ`,  length: panelW, angles: [angle / 2, angle / 2] });
+    bars.push({ kind: 'straight', role: `Панель ${i + 1} лев.`, length: h,      angles: [90, 90] });
+    bars.push({ kind: 'straight', role: `Панель ${i + 1} прав.`,length: h,      angles: [90, 90] });
+  }
+  // SVG path: simplified flat rendering as horizontal layout of N panels
+  const path = `M 0 0 L ${w} 0 L ${w} ${h} L 0 ${h} Z`;
+  return {
+    svgPath: path,
+    framePerim: totalPerim,
+    framePerimStraight: totalPerim,
+    framePerimArched: 0,
+    glassArea,
+    bars,
+  };
+}
+
 // ── Dispatcher ───────────────────────────────────────────────────────
 const SHAPE_FUNCTIONS = {
   rectangle: shapeRectangle,
@@ -287,6 +316,7 @@ const SHAPE_FUNCTIONS = {
   circle: shapeCircle,
   quarter_circle: shapeQuarterCircle,
   polygon: shapePolygon,
+  bay: shapeBay,
 };
 
 /**
