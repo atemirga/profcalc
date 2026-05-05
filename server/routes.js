@@ -1,7 +1,7 @@
 // server/routes.js — REST API for admin + mini-app
 import express from 'express';
 import db, { logEvent } from './db.js';
-import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS } from './calc.js';
+import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom } from './calc.js';
 import { verifyInitData } from './telegram-auth.js';
 import { buildKpPdf } from './pdf.js';
 
@@ -565,6 +565,54 @@ api.put('/projects/:id', (req, res) => {
   );
   logEvent(installerId || 'anon', 'project.update', req.params.id);
   res.json({ ok: true, ...computed });
+});
+
+// ── Phase 4: BOM (Logikal-style materials list) for a saved project ─────
+api.get('/projects/:id/bom', (req, res) => {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const items = JSON.parse(row.items);
+  // Aggregate lines across all items × qty
+  const installerId = row.installer_id;
+  const priceLevel = installerId ? 'dealer' : 'retail';
+  const aggregate = [];
+  let totalPerim = 0, totalArea = 0, totalSash = 0;
+  items.forEach((it, idx) => {
+    const c = calcWindow({
+      layout: it.layout, glazingId: it.glazingId, systemId: it.systemId,
+      manufacturerId: row.manufacturer_id, installerId, priceLevel,
+      extras: it.extras, colorId: it.colorId, hardwareKitId: it.hardwareKitId,
+      handleId: it.handleId, handleColorId: it.handleColorId, doorKit: it.doorKit,
+      turnProfile: it.turnProfile, frameAdapter: it.frameAdapter,
+    });
+    const qty = it.qty || 1;
+    totalPerim += c.geometry.framePerim * qty;
+    totalArea += (it.layout.width / 1000 * it.layout.height / 1000) * qty;
+    totalSash += (c.geometry.openCount || 0) * qty;
+    c.lines.forEach(ln => {
+      aggregate.push({
+        ...ln, qtyNum: ln.qtyNum * qty, qty: ((ln.qtyNum * qty).toFixed(2) + ' ' + ln.unit),
+        price: ln.price * qty, posIdx: idx + 1,
+      });
+    });
+  });
+  // Merge identical SKUs (sum qty/price)
+  const merged = {};
+  for (const ln of aggregate) {
+    const k = ln.article + '|' + ln.label;
+    if (merged[k]) {
+      merged[k].qtyNum += ln.qtyNum;
+      merged[k].qty = merged[k].qtyNum.toFixed(2) + ' ' + ln.unit;
+      merged[k].price += ln.price;
+    } else merged[k] = { ...ln };
+  }
+  const bom = buildBom(Object.values(merged));
+  res.json({
+    projectId: row.id, name: row.name, clientName: row.client_name,
+    positionsCount: items.length,
+    totalPerim: +totalPerim.toFixed(2), totalArea: +totalArea.toFixed(2), totalSashes: totalSash,
+    ...bom,
+  });
 });
 
 api.delete('/projects/:id', (req, res) => {

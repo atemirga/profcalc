@@ -660,6 +660,36 @@ function lineFlat(label, qty, unit, articleRow, priceLevel) {
   };
 }
 function tag(line, category) { line.category = category; return line; }
+
+// ── Phase 4: Logikal-style BOM grouping ─────────────────────────────────
+// Group all priced lines into 4 sections (Профили / Спец. длины / Аксессуары / Уплотнители)
+// + summary row (qty, unit, code, name, color, price/pkg, total).
+export const BOM_SECTIONS = [
+  { id: 'profiles',    title: 'Профили',           keys: ['profile-frame','profile-sash','profile-mullion','profile-bead'] },
+  { id: 'special',     title: 'Специальные длины', keys: ['profile-shtulp','profile-turn','profile-adapter','profile-doorsash','profile-threshold'] },
+  { id: 'accessories', title: 'Аксессуары',        keys: ['hardware','consumables','reinforcement','extras','glazing'] },
+  { id: 'sealing',     title: 'Уплотнители',       keys: ['sealing'] },
+];
+
+export function buildBom(allLines) {
+  const out = { profiles: [], special: [], accessories: [], sealing: [], total: 0 };
+  for (const ln of allLines) {
+    // categorize: split 'profile' more finely by article name
+    let bucket = 'accessories';
+    if (ln.category === 'sealing') bucket = 'sealing';
+    else if (ln.category === 'profile') {
+      const lbl = (ln.label || '').toLowerCase();
+      if (/штульп|разворот|адаптер|порог|дверная створка/.test(lbl)) bucket = 'special';
+      else bucket = 'profiles';
+    }
+    out[bucket].push({
+      qty: ln.qtyNum, unit: ln.unit, code: ln.article, label: ln.label,
+      unitPrice: ln.unitPrice, total: ln.price,
+    });
+    out.total += ln.price;
+  }
+  return out;
+}
 function summarizeByCategory(lines) {
   const out = {};
   for (const c of CATEGORIES) out[c] = 0;
