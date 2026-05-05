@@ -963,7 +963,7 @@
         }),
       ]));
 
-      // ── Phase 2: Door hardware kit (only when layout contains a door)
+      // ── Phase 2 + improvement: Door hardware kit with presets (Базовый / Расширенный / Все)
       if (isDoor) {
         if (!item.doorKit) item.doorKit = {};
         const dk = item.doorKit;
@@ -979,30 +979,102 @@
           hinge: 'Петли (3 шт)', closer: 'Доводчик', threshold: 'Порог (по ширине двери)',
           strike: 'Ответная планка', rosette: 'Розетка', fixator: 'Фиксатор', handle_kit: 'Фурнитура для ручки',
         };
-        const catDefaults = {
-          lock: 'dh-lock-bachok-dorma', lock_tongue: 'dh-lock-tongue-dorma', cylinder: 'dh-cyl-dorma',
-          hinge: 'dh-hinge-hn3303-sk', closer: 'dh-closer-ts77-dorma', threshold: 'dh-thresh-55gold',
-          strike: 'dh-strike-klong', rosette: 'dh-rosette-sk', fixator: 'dh-fixator-klong', handle_kit: 'dh-handle-kit-sk',
+        // Preset definitions
+        const presets = {
+          minimal: {
+            label: 'Минимум', desc: '5 позиций — замок, личинка, петли, ручка, порог',
+            cats: ['lock', 'cylinder', 'hinge', 'handle_kit', 'threshold'],
+            values: { lock: 'dh-lock-bachok-dorma', cylinder: 'dh-cyl-kale', hinge: 'dh-hinge-hn3303-sk', handle_kit: 'dh-handle-kit-sk', threshold: 'dh-thresh-pvc' },
+          },
+          basic: {
+            label: 'Базовый', desc: '7 позиций — стандарт DORMA + K-LONG',
+            cats: ['lock', 'cylinder', 'hinge', 'closer', 'handle_kit', 'strike', 'threshold'],
+            values: { lock: 'dh-lock-bachok-dorma', cylinder: 'dh-cyl-dorma', hinge: 'dh-hinge-hn3303-sk', closer: 'dh-closer-ts73-dorma', handle_kit: 'dh-handle-kit-sk', strike: 'dh-strike-klong', threshold: 'dh-thresh-55gold' },
+          },
+          full: {
+            label: 'Расширенный', desc: '10 позиций — всё из накладной (DORMA TS77 + 2 замка + фиксатор + розетка)',
+            cats: ['lock', 'lock_tongue', 'cylinder', 'hinge', 'closer', 'threshold', 'strike', 'rosette', 'fixator', 'handle_kit'],
+            values: { lock: 'dh-lock-bachok-dorma', lock_tongue: 'dh-lock-tongue-dorma', cylinder: 'dh-cyl-dorma', hinge: 'dh-hinge-hn3303-sk', closer: 'dh-closer-ts77-dorma', threshold: 'dh-thresh-55gold', strike: 'dh-strike-klong', rosette: 'dh-rosette-sk', fixator: 'dh-fixator-klong', handle_kit: 'dh-handle-kit-sk' },
+          },
         };
+        // Detect current preset
+        function detectPreset() {
+          for (const [name, p] of Object.entries(presets)) {
+            const enabledCats = Object.entries(catKey).filter(([cat]) => dk[catKey[cat]] !== null && dk[catKey[cat]] !== undefined ? dk[catKey[cat]] : true);
+            // Simple check: count enabled (non-null) keys equals preset.cats.length AND every preset.cat key is set
+            const presetSet = new Set(p.cats.map(c => catKey[c]));
+            const liveSet = new Set(Object.keys(catKey).filter(c => {
+              const v = dk[catKey[c]];
+              return v !== null;  // null = explicitly disabled
+            }).map(c => catKey[c]));
+            if (presetSet.size === liveSet.size && [...presetSet].every(k => liveSet.has(k))) return name;
+          }
+          return 'custom';
+        }
+        function applyPreset(name) {
+          const p = presets[name];
+          if (!p) return;
+          // Set all 10 cats: enable preset.cats with their default values, null the rest
+          Object.keys(catKey).forEach(cat => {
+            dk[catKey[cat]] = p.cats.includes(cat) ? (p.values[cat] || dhByCat[cat]?.[0]?.id || null) : null;
+          });
+          state._dkExpanded = false;
+          paint();
+        }
+        const curPreset = detectPreset();
+        if (state._dkExpanded == null) state._dkExpanded = curPreset === 'custom';
+
         body.appendChild(h('div', { class: 'section-label' }, 'Дверной комплект'));
-        const dCard = h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-direction:column;gap:10px' });
-        Object.keys(catLabel).forEach(cat => {
-          const opts = dhByCat[cat] || [];
-          if (!opts.length) return;
-          const curId = dk[catKey[cat]] !== undefined ? dk[catKey[cat]] : catDefaults[cat];
-          const sel = h('select', { style: 'flex:1;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;font-size:12.5px;background:#fff' }, [
-            h('option', { value: '' }, '— не нужно —'),
-            ...opts.map(o => h('option', { value: o.id, selected: o.id === curId ? 'selected' : null },
-              `${o.vendor} · ${o.name} · ${fmtNum(o.price)} ₸/${o.unit}`)),
-          ]);
-          sel.value = curId || '';
-          sel.addEventListener('change', () => { dk[catKey[cat]] = sel.value || null; paint(); });
-          dCard.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
-            h('div', { style: 'width:130px;font-size:12px;color:var(--muted);font-weight:500' }, catLabel[cat]),
-            sel,
-          ]));
-        });
-        body.appendChild(dCard);
+
+        // Preset chips
+        body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:8px;display:flex;flex-direction:column;gap:8px' }, [
+          h('div', { style: 'display:flex;gap:6px;flex-wrap:wrap' },
+            Object.entries(presets).map(([name, p]) => {
+              const sel = curPreset === name && !state._dkExpanded;
+              return h('button', {
+                onClick: () => applyPreset(name),
+                style: `padding:8px 14px;border-radius:8px;border:1.5px solid ${sel ? 'var(--accent)' : 'var(--rule)'};background:${sel ? 'var(--accent)' : '#fff'};color:${sel ? '#fff' : 'var(--text)'};font-size:12.5px;font-weight:${sel ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:2px;flex:1;min-width:130px`,
+              }, [
+                h('span', { style: 'font-weight:600' }, p.label),
+                h('span', { style: `font-size:10.5px;font-weight:500;color:${sel ? 'rgba(255,255,255,.85)' : 'var(--muted)'}` }, p.desc),
+              ]);
+            })),
+          h('button', {
+            onClick: () => { state._dkExpanded = !state._dkExpanded; paint(); },
+            style: 'background:none;border:none;color:var(--accent);font-size:12.5px;font-weight:600;text-align:left;cursor:pointer;padding:4px 0',
+          }, state._dkExpanded ? '▾ Скрыть индивидуальную настройку' : (curPreset === 'custom' ? '⚙ Кастомный набор' : '⚙ Настроить вручную (10 параметров)')),
+        ]));
+
+        // Detailed dropdowns (only when expanded)
+        if (state._dkExpanded) {
+          const dCard = h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-direction:column;gap:10px' });
+          Object.keys(catLabel).forEach(cat => {
+            const opts = dhByCat[cat] || [];
+            if (!opts.length) return;
+            const curId = dk[catKey[cat]] !== undefined ? dk[catKey[cat]] : (presets.full.values[cat] || null);
+            const sel = h('select', { style: 'flex:1;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;font-size:12.5px;background:#fff' }, [
+              h('option', { value: '' }, '— не нужно —'),
+              ...opts.map(o => h('option', { value: o.id, selected: o.id === curId ? 'selected' : null },
+                `${o.vendor} · ${o.name} · ${fmtNum(o.price)} ₸/${o.unit}`)),
+            ]);
+            sel.value = curId || '';
+            sel.addEventListener('change', () => { dk[catKey[cat]] = sel.value || null; paint(); });
+            dCard.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+              h('div', { style: 'width:130px;font-size:12px;color:var(--muted);font-weight:500' }, catLabel[cat]),
+              sel,
+            ]));
+          });
+          body.appendChild(dCard);
+        } else {
+          // Compact summary of active components when collapsed
+          const activeCats = Object.keys(catLabel).filter(cat => {
+            const v = dk[catKey[cat]];
+            return v !== null && v !== '';
+          });
+          body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:14px;font-size:12px;color:var(--muted);line-height:1.5' },
+            'Включено: ' + activeCats.length + ' компонентов · ' +
+            activeCats.map(c => catLabel[c].split(' ')[0]).join(', ')));
+        }
       }
 
       // ── Phase 3: special profile additions
@@ -1037,17 +1109,48 @@
       });
       body.appendChild(extrasCard);
 
-      // ── Phase 1: Sill / Ebb / Mesh model selectors (if extra is enabled)
-      function modelPicker(titleStr, list, itemKey, fmt) {
+      // ── Phase 1: Sill / Ebb / Mesh model selectors — grouped by vendor/material/kind
+      function groupedPicker(titleStr, list, itemKey, groupKey, groupLabel, fmt) {
         if (!list.length) return null;
-        const card = h('div', { class: 'card list', style: 'margin-bottom:10px' });
+        // Group items by groupKey
+        const groups = {};
         list.forEach(rec => {
-          const sel = rec.id === item.extras[itemKey];
-          card.appendChild(h('div', { class: 'glaz-row' + (sel ? ' sel' : ''), onClick: () => { item.extras[itemKey] = rec.id; paint(); } }, [
-            h('div', { class: 'radio' }),
-            h('div', { class: 'meta' }, fmt(rec)),
-            h('div', { class: 'price' }, fmt.price ? fmt.price(rec) : ''),
+          const k = rec[groupKey] || '—';
+          (groups[k] = groups[k] || []).push(rec);
+        });
+        const groupNames = Object.keys(groups).sort();
+        // Track which group is expanded — find the group that contains the currently selected item
+        const curId = item.extras[itemKey];
+        const curRec = list.find(r => r.id === curId);
+        const stateKey = '_pickerExpand_' + itemKey;
+        if (state[stateKey] == null) state[stateKey] = curRec ? curRec[groupKey] : groupNames[0];
+        const card = h('div', { class: 'card', style: 'margin-bottom:10px;overflow:hidden' });
+        groupNames.forEach(gn => {
+          const expanded = state[stateKey] === gn;
+          const items = groups[gn];
+          const hasSel = items.some(r => r.id === curId);
+          // Group header
+          card.appendChild(h('div', {
+            style: `display:flex;align-items:center;justify-content:space-between;padding:10px 14px;cursor:pointer;background:${expanded ? 'var(--accent-soft, #fbeede)' : '#faf7f1'};border-bottom:1px solid var(--rule);font-size:12.5px;font-weight:600`,
+            onClick: () => { state[stateKey] = expanded ? null : gn; paint(); },
+          }, [
+            h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+              h('span', { html: expanded ? '▾' : '▸', style: 'font-size:10px;color:var(--muted)' }),
+              h('span', {}, groupLabel(gn)),
+              hasSel ? h('span', { style: 'font-size:10px;color:var(--accent);font-weight:600' }, '● выбрано') : null,
+            ]),
+            h('span', { style: 'font-size:11px;color:var(--muted);font-weight:500' }, items.length + ' моделей'),
           ]));
+          if (expanded) {
+            items.forEach(rec => {
+              const sel = rec.id === curId;
+              card.appendChild(h('div', { class: 'glaz-row' + (sel ? ' sel' : ''), style: 'border-bottom:1px solid var(--rule)', onClick: () => { item.extras[itemKey] = rec.id; paint(); } }, [
+                h('div', { class: 'radio' }),
+                h('div', { class: 'meta' }, fmt(rec)),
+                h('div', { class: 'price' }, fmt.price ? fmt.price(rec) : ''),
+              ]));
+            });
+          }
         });
         return h('div', {}, [
           h('div', { class: 'section-label', style: 'margin-top:6px' }, titleStr),
@@ -1056,28 +1159,28 @@
       }
       if (item.extras.sill) {
         const fmt = (s) => [
-          h('div', { class: 'label' }, s.vendor + ' ' + s.name + ' · ' + s.width_mm + ' мм'),
+          h('div', { class: 'label' }, s.name + ' · ' + s.width_mm + ' мм'),
           h('div', { class: 'sub' }, s.color || ''),
         ];
         fmt.price = (s) => [fmtKZT(s.price_per_m), h('span', { class: 'muted', style: 'font-size:10px;font-weight:500' }, '/м')];
-        body.appendChild(modelPicker('Модель подоконника', state.cache.sills, 'sillId', fmt));
+        body.appendChild(groupedPicker('Подоконник', state.cache.sills, 'sillId', 'vendor', v => v, fmt));
       }
       if (item.extras.ebb) {
         const fmt = (e) => [
-          h('div', { class: 'label' }, e.material + ' ' + e.width_mm + ' мм'),
+          h('div', { class: 'label' }, e.width_mm + ' мм'),
           h('div', { class: 'sub' }, e.color || ''),
         ];
         fmt.price = (e) => [fmtKZT(e.price_per_m), h('span', { class: 'muted', style: 'font-size:10px;font-weight:500' }, '/м')];
-        body.appendChild(modelPicker('Модель отлива', state.cache.ebbs, 'ebbId', fmt));
+        body.appendChild(groupedPicker('Отлив', state.cache.ebbs, 'ebbId', 'material', m => m, fmt));
       }
       if (item.extras.mesh) {
         const kindL = { frame: 'Рамочная', sliding: 'Раздвижная', pleated: 'Плиссе', antikoshka: 'Антикошка', roll: 'Рулонная' };
         const fmt = (m) => [
-          h('div', { class: 'label' }, kindL[m.kind] + ' · ' + m.name),
+          h('div', { class: 'label' }, m.name),
           h('div', { class: 'sub' }, m.color || ''),
         ];
         fmt.price = (m) => [fmtKZT(m.price_per_unit), h('span', { class: 'muted', style: 'font-size:10px;font-weight:500' }, '/' + m.unit)];
-        body.appendChild(modelPicker('Тип сетки', state.cache.meshes, 'meshId', fmt));
+        body.appendChild(groupedPicker('Москитная сетка', state.cache.meshes, 'meshId', 'kind', k => kindL[k] || k, fmt));
       }
 
       // Install cost editor — visible only when install is enabled

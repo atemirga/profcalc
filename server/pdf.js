@@ -240,7 +240,7 @@ function drawSchemaWithDims(doc, x, y, w, h, layout, posLabel, qty) {
 }
 
 // ── Phase 4: Render the BOM page (Logikal-style materials list)
-function drawBomPage(doc, bom, project, items, installer) {
+function drawBomPage(doc, bom, project, items, installer, perItemSummaries = null) {
   doc.addPage();
   const W = doc.page.width - 80;
   const startX = 40;
@@ -254,6 +254,49 @@ function drawBomPage(doc, bom, project, items, installer) {
   y += 56;
   doc.moveTo(startX, y).lineTo(startX + W, y).strokeColor(RULE).lineWidth(0.8).stroke();
   y += 10;
+
+  // ── Positions block — small drawing per item with code + dimensions + summary
+  if (items && items.length) {
+    doc.font('SansB').fontSize(11).fillColor(TEXT).text('ПОЗИЦИИ', startX, y);
+    y += 16;
+    // Calculate grid: 3 columns max, item card ~165px wide × 130 tall
+    const cardW = 165, cardH = 130, gap = 10;
+    const cols = Math.max(1, Math.floor((W + gap) / (cardW + gap)));
+    let col = 0, rowStartY = y;
+    items.forEach((it, idx) => {
+      if (col === 0 && y + cardH > doc.page.height - 60) { doc.addPage(); y = 40; rowStartY = y; }
+      const x = startX + col * (cardW + gap);
+      // border
+      doc.rect(x, y, cardW, cardH).strokeColor(RULE).lineWidth(0.5).stroke();
+      // Drawing inside card (top portion)
+      const posLabel = `Поз:${String(idx + 1).padStart(3, '0')}`;
+      drawSchemaWithDims(doc, x + 4, y + 14, cardW - 8, cardH - 50, it.layout, posLabel, it.qty);
+      // Summary at bottom
+      const sum = perItemSummaries ? perItemSummaries[idx] : null;
+      const sumY = y + cardH - 32;
+      doc.font('Sans').fontSize(7).fillColor(MUTED);
+      doc.text(`${it.layout.width}×${it.layout.height} мм`, x + 6, sumY);
+      if (sum) {
+        doc.text(`Периметр: ${sum.perim.toFixed(1)} м · Площадь: ${sum.area.toFixed(2)} м²`, x + 6, sumY + 9);
+        doc.font('SansB').fontSize(8).fillColor(ACCENT_DARK).text(num(sum.total) + ' ₸', x + 6, sumY + 19);
+      }
+      col++;
+      if (col >= cols) { col = 0; y += cardH + gap; rowStartY = y; }
+    });
+    if (col > 0) y += cardH + gap;
+    // Project totals if any
+    if (perItemSummaries) {
+      const totPerim = perItemSummaries.reduce((s, p) => s + p.perim * (p.qty || 1), 0);
+      const totArea  = perItemSummaries.reduce((s, p) => s + p.area * (p.qty || 1), 0);
+      const totSash  = perItemSummaries.reduce((s, p) => s + (p.sashes || 0) * (p.qty || 1), 0);
+      doc.font('Sans').fontSize(9).fillColor(MUTED).text(
+        `Количество позиций: ${items.length}  ·  Общий периметр: ${totPerim.toFixed(1)} м  ·  Общая площадь: ${totArea.toFixed(2)} м²  ·  Створок: ${totSash}`,
+        startX, y);
+      y += 14;
+    }
+    doc.moveTo(startX, y).lineTo(startX + W, y).strokeColor(RULE).lineWidth(0.5).stroke();
+    y += 10;
+  }
 
   function tableHeader(title) {
     if (y > doc.page.height - 80) { doc.addPage(); y = 40; }
@@ -481,8 +524,10 @@ export function buildKpPdf(kp, project, calc, installer) {
 
   // ── Phase 4: append BOM (Список материалов) page — Logikal-style
   try {
-    // Aggregate all priced lines across items × qty, then merge identical SKUs
+    // Aggregate all priced lines across items × qty, then merge identical SKUs.
+    // Also collect per-item summary for the per-position drawings on top of BOM page.
     const aggregate = [];
+    const perItemSummaries = [];
     items.forEach((it, idx) => {
       const c = calcWindow({
         layout: it.layout, glazingId: it.glazingId, systemId: it.systemId,
@@ -494,6 +539,13 @@ export function buildKpPdf(kp, project, calc, installer) {
         turnProfile: it.turnProfile, frameAdapter: it.frameAdapter,
       });
       const itQty = it.qty || 1;
+      perItemSummaries.push({
+        perim: c.geometry.framePerim,
+        area:  (it.layout.width / 1000) * (it.layout.height / 1000),
+        sashes: c.geometry.openCount,
+        total: c.total * itQty,
+        qty: itQty,
+      });
       c.lines.forEach(ln => aggregate.push({
         ...ln, qtyNum: ln.qtyNum * itQty, price: ln.price * itQty,
       }));
@@ -505,7 +557,7 @@ export function buildKpPdf(kp, project, calc, installer) {
       else merged[k] = { ...ln };
     }
     const bom = buildBom(Object.values(merged));
-    drawBomPage(doc, bom, project, items, installer);
+    drawBomPage(doc, bom, project, items, installer, perItemSummaries);
   } catch (e) {
     // never block KP rendering on BOM failure
     console.error('BOM page generation failed:', e.message);
