@@ -53,8 +53,31 @@ function profileArticle(systemName, part) {
     'Salamander bluEvolution 82': { frame: 'SAL-BLU-FRAME', sash: 'SAL-BLU-SASH', mull: 'KBE-EXP-MULL', bead: 'REH-DEL-BEAD' },
   };
   const m = mapping[systemName];
-  if (!m) throw new Error(`No article mapping for system ${systemName}`);
-  return m[part];
+  if (m) return m[part];
+  // Phase 3 fallback: any system without legacy mapping uses profile_parts directly
+  return null;
+}
+// Lookup a profile_parts row, or fall back to the legacy `articles` table.
+// Returns a synthetic article-shaped object: { article, base, dealer, retail }.
+function profilePart(systemId, kind, priceLevel) {
+  const sys = db.prepare('SELECT name FROM profile_systems WHERE id = ?').get(systemId);
+  const sysName = sys ? sys.name : null;
+  const legacyKey = ({ frame: 'frame', sash: 'sash', mullion: 'mull', bead: 'bead' })[kind];
+  const legacyArt = sysName && legacyKey ? profileArticle(sysName, legacyKey) : null;
+  if (legacyArt) {
+    const a = db.prepare('SELECT * FROM articles WHERE article = ?').get(legacyArt);
+    if (a) return a;
+  }
+  const part = db.prepare('SELECT * FROM profile_parts WHERE system_id = ? AND kind = ? LIMIT 1').get(systemId, kind);
+  if (!part) return null;
+  // Synthesize an articles-shape row: caller does line(... articleRow, priceLevel)
+  // and reads articleRow[priceLevel]. Apply tier multiplier to price_per_m.
+  const dealerP = Math.round(part.price_per_m * priceMultiplier('dealer'));
+  const retailP = Math.round(part.price_per_m * priceMultiplier('retail'));
+  return {
+    article: part.code, name: part.name, unit: 'м',
+    base: part.price_per_m, dealer: dealerP, retail: retailP,
+  };
 }
 
 function glazingArticle(formula) {
@@ -191,23 +214,29 @@ export function calcWindow(input) {
   const colorTag = color ? ` · ${color.ral}` : '';
 
   // Frame
-  const frameArt = art(profileArticle(sys.name, 'frame'));
-  allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · рама${colorTag}`, framePerim, 'м', frameArt, priceLevel), colorSurchargePct), 'profile'));
+  const frameArt = profilePart(systemId, 'frame', priceLevel);
+  if (frameArt) {
+    allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · рама${colorTag}`, framePerim, 'м', frameArt, priceLevel), colorSurchargePct), 'profile'));
+  }
 
   // Sash
   if (sashPerimTotal > 0) {
-    const sashArt = art(profileArticle(sys.name, 'sash'));
-    allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · створка (×${openCount})${colorTag}`, sashPerimTotal, 'м', sashArt, priceLevel), colorSurchargePct), 'profile'));
+    const sashArt = profilePart(systemId, 'sash', priceLevel);
+    if (sashArt) {
+      allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · створка (×${openCount})${colorTag}`, sashPerimTotal, 'м', sashArt, priceLevel), colorSurchargePct), 'profile'));
+    }
   }
 
   // Imposts (horizontal + vertical)
   const totalMullion = mullionH + mullionV;
   if (totalMullion > 0) {
-    const mullArt = art(profileArticle(sys.name, 'mull'));
-    const tagStr = mullionH > 0 && mullionV > 0 ? ' (гориз. + верт.)'
-              : mullionH > 0 ? ' (горизонтальный)'
-              : ' (вертикальный)';
-    allLines.push(tag(applySurcharge(line(`Импост ${sys.name}${tagStr}${colorTag}`, totalMullion, 'м', mullArt, priceLevel), colorSurchargePct), 'profile'));
+    const mullArt = profilePart(systemId, 'mullion', priceLevel);
+    if (mullArt) {
+      const tagStr = mullionH > 0 && mullionV > 0 ? ' (гориз. + верт.)'
+                : mullionH > 0 ? ' (горизонтальный)'
+                : ' (вертикальный)';
+      allLines.push(tag(applySurcharge(line(`Импост ${sys.name}${tagStr}${colorTag}`, totalMullion, 'м', mullArt, priceLevel), colorSurchargePct), 'profile'));
+    }
   }
 
   // ── Phase 3: bead (штапик) length — perimeter of all glass packets, +5% запас на раскрой
