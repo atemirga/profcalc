@@ -5,6 +5,7 @@
 //   { width, height, sections: [openingCode, ...] }
 
 import db from './db.js';
+import { shapeGeometry } from './shapes.js';
 
 const FIXED_OPENINGS = new Set(['FIX', 'ДВЕРЬ-FIX']);
 const DOOR_PREFIX = 'ДВЕРЬ-';
@@ -160,6 +161,14 @@ export function calcWindow(input) {
   if (!height || height < 300 || height > 4000) throw new Error('height out of range (300..4000)');
   if (!Array.isArray(layout.rows) || !layout.rows.length) throw new Error('layout.rows required');
 
+  // ── Phase 18: shape geometry (rectangle by default; arched/triangle/circle override perim+area)
+  const shape = input.shape || layout.shape || { kind: 'rectangle', width, height, params: {} };
+  if (!shape.width)  shape.width  = width;
+  if (!shape.height) shape.height = height;
+  const shapeGeo = shapeGeometry(shape);
+  const isNonRect = shape.kind && shape.kind !== 'rectangle';
+  const shapeRow = isNonRect ? db.prepare('SELECT * FROM shape_types WHERE code = ?').get(shape.kind) : null;
+
   const sys = db.prepare('SELECT * FROM profile_systems WHERE id = ?').get(systemId);
   if (!sys) throw new Error(`system ${systemId} not found`);
   const glaz = db.prepare('SELECT * FROM glazing WHERE id = ?').get(glazingId);
@@ -176,7 +185,10 @@ export function calcWindow(input) {
   const rowHs = normalize(layout.rows, height, 'height_mm').map(r => h_m * r);
   const sashFrameInset = 0.07; // 70mm sash frame typical
 
-  const framePerim = 2 * (w_m + h_m);
+  // Phase 18: framePerim from shape geometry if non-rectangular; otherwise classic 2(w+h)
+  const framePerim = isNonRect ? (shapeGeo.framePerim / 1000) : 2 * (w_m + h_m);
+  const framePerimStraight = isNonRect ? (shapeGeo.framePerimStraight / 1000) : framePerim;
+  const framePerimArched   = isNonRect ? (shapeGeo.framePerimArched / 1000)   : 0;
   let mullionH = 0;     // horizontal imposts (between rows)
   let mullionV = 0;     // vertical imposts (between sections within a row)
   let sashPerimTotal = 0;
@@ -214,10 +226,32 @@ export function calcWindow(input) {
   const allLines = [];
   const colorTag = color ? ` · ${color.ral}` : '';
 
-  // Frame
+  // Frame — Phase 18: split into straight + arched (bent) for non-rectangular shapes
   const frameArt = profilePart(systemId, 'frame', priceLevel);
   if (frameArt) {
-    allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · рама${colorTag}`, framePerim, 'м', frameArt, priceLevel), colorSurchargePct), 'profile'));
+    // straight portion
+    if (framePerimStraight > 0) {
+      allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · рама${isNonRect ? ' (прямые участки)' : ''}${colorTag}`, framePerimStraight, 'м', frameArt, priceLevel), colorSurchargePct), 'profile'));
+    }
+    // arched (bent) portion — costs 1.5× as preformed/bent
+    if (framePerimArched > 0) {
+      const bentPrice = Math.round(frameArt[priceLevel] * 1.5);
+      allLines.push(tag(applySurcharge({
+        label: `Профиль ПВХ ${sys.name} · рама гнутая (${shapeRow?.name || shape.kind})${colorTag}`,
+        qty: framePerimArched.toFixed(2) + ' м', qtyNum: framePerimArched, unit: 'м',
+        article: frameArt.article + '-ARC', unitPrice: bentPrice,
+        price: Math.round(framePerimArched * bentPrice),
+      }, colorSurchargePct), 'profile'));
+      // Bend service fee — one-time for the whole frame
+      const bendFee = shapeRow?.bend_fee || 0;
+      if (bendFee > 0) {
+        allLines.push(tag({
+          label: `Гибка профиля рамы (${shapeRow.name})`,
+          qty: '1 услуга', qtyNum: 1, unit: 'услуга',
+          article: 'BEND-FRAME', unitPrice: bendFee, price: bendFee,
+        }, 'consumables'));
+      }
+    }
   }
 
   // Sash
@@ -291,8 +325,9 @@ export function calcWindow(input) {
     }
   }
 
-  // Glazing — Phase 12: per-glass-pack itemized lines with size in mm
+  // Glazing — Phase 12+18: per-glass-pack itemized lines; non-rectangular shapes get factor surcharge
   const glazArt = art(glazingArticle(glaz.formula));
+  const glassShapeFactor = shapeRow ? Number(shapeRow.glass_factor) || 1.0 : 1.0;
   // Walk layout sections to emit one line per distinct glass packet size
   // (a stock cutting list will optimize identical sizes anyway).
   const glassMap = {};
@@ -313,14 +348,31 @@ export function calcWindow(input) {
     });
   });
   Object.values(glassMap).forEach(g => {
-    const label = `Стеклопакет ${glaz.formula} · ${g.wMm}×${g.hMm} мм` + (g.qty > 1 ? ` (×${g.qty})` : '');
+    const factorTag = glassShapeFactor > 1 ? ` · форма ×${glassShapeFactor.toFixed(1)}` : '';
+    const label = `Стеклопакет ${glaz.formula} · ${g.wMm}×${g.hMm} мм${factorTag}` + (g.qty > 1 ? ` (×${g.qty})` : '');
     const totalArea = +(g.areaM2 * g.qty).toFixed(3);
+    const unitPrice = Math.round(glazArt[priceLevel] * glassShapeFactor);
     allLines.push(tag({
       label, qty: totalArea.toFixed(2) + ' м²', qtyNum: totalArea, unit: 'м²',
-      article: glazArt.article, unitPrice: glazArt[priceLevel],
-      price: Math.round(totalArea * glazArt[priceLevel]),
+      article: glazArt.article, unitPrice,
+      price: Math.round(totalArea * unitPrice),
     }, 'glazing'));
   });
+  // ── Phase 18: extra glass area for non-rectangular extensions (arch top, etc)
+  if (isNonRect) {
+    const rectGlassArea = w_m * h_m;
+    const shapeGlassArea = (shapeGeo.glassArea / 1e6); // mm² → m²
+    const extraArea = +(shapeGlassArea - rectGlassArea).toFixed(3);
+    if (extraArea > 0.01) {
+      const unitPrice = Math.round(glazArt[priceLevel] * glassShapeFactor);
+      allLines.push(tag({
+        label: `Стеклопакет доп. площадь (${shapeRow?.name || shape.kind})`,
+        qty: extraArea.toFixed(2) + ' м²', qtyNum: extraArea, unit: 'м²',
+        article: glazArt.article + '-EXT', unitPrice,
+        price: Math.round(extraArea * unitPrice),
+      }, 'glazing'));
+    }
+  }
 
   // Hardware — caller can pick a specific kit; otherwise default Roto NT
   const winSashCount = openCount - doorCount - slidingCount;
@@ -689,7 +741,7 @@ export function calcWindow(input) {
   const total = subtotal - discount;
 
   return {
-    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId, doorKit, doorTypeId, turnProfile: !!input.turnProfile, frameAdapter: !!input.frameAdapter },
+    input: { width, height, layout, shape, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId, doorKit, doorTypeId, turnProfile: !!input.turnProfile, frameAdapter: !!input.frameAdapter },
     geometry: {
       framePerim: +framePerim.toFixed(3),
       mullionH: +mullionH.toFixed(3),
@@ -736,6 +788,7 @@ export function calcProject(input) {
       doorTypeId: it.doorTypeId,
       turnProfile: it.turnProfile,
       frameAdapter: it.frameAdapter,
+      shape: it.shape,
     });
     const qty = it.qty || 1;
     perItem.push({

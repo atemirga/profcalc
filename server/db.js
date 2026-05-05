@@ -281,14 +281,26 @@ CREATE TABLE IF NOT EXISTS door_hardware (
 -- ── PHASE 7: door types catalog (glazed PVC/profile doors only — NOT metal/wood)
 CREATE TABLE IF NOT EXISTS door_types (
   id TEXT PRIMARY KEY,
-  code TEXT NOT NULL,                    -- 'entrance' | 'balcony' | 'shtulp' | 'french' | 'storefront' | 'swing' | 'terrace' | 'sliding_portal' | 'double'
-  name TEXT NOT NULL,                    -- 'Входная стеклянная одностворчатая'
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
   description TEXT,
   default_width INTEGER NOT NULL,
   default_height INTEGER NOT NULL,
   reinforcement_factor REAL NOT NULL DEFAULT 1.0,
-  required_components TEXT,              -- JSON list of door_hardware categories that MUST be in the kit
+  required_components TEXT,
   default_opening TEXT NOT NULL DEFAULT 'ДВЕРЬ-ПП'
+);
+
+-- ── PHASE 18: Shape catalog — non-rectangular outer contours
+CREATE TABLE IF NOT EXISTS shape_types (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL,                    -- rectangle | arched | half_circle | triangle | trapezoid | gothic | pentagon | hexagon | oval | circle | quarter_circle | polygon | bay
+  name TEXT NOT NULL,
+  description TEXT,
+  glass_factor REAL NOT NULL DEFAULT 1.0,
+  bend_fee INTEGER NOT NULL DEFAULT 0,
+  has_bent_profile INTEGER NOT NULL DEFAULT 0,
+  params_schema TEXT                     -- JSON of parameter names + defaults: {"arch_rise":600,"apex_x":600}
 );
 `);
 
@@ -717,6 +729,53 @@ try {
   db.prepare(`DELETE FROM handles WHERE id IN ('hnd-antipanic','hnd-apecs-knob')`).run();
   db.prepare(`DELETE FROM door_types WHERE id IN ('dt-firedoor','dt-antipanic')`).run();
 } catch {}
+
+// ── Phase 18 seeds: shape catalog ─────────────────────────────────────
+if (isEmpty('shape_types')) {
+  const ins = db.prepare(`INSERT INTO shape_types (id,code,name,description,glass_factor,bend_fee,has_bent_profile,params_schema) VALUES (?,?,?,?,?,?,?,?)`);
+  const seeds = [
+    ['sh-rectangle',     'rectangle',     'Прямоугольное',
+      'Стандартная прямоугольная форма', 1.0, 0, 0, '{}'],
+    ['sh-arched',        'arched',        'Арочное (с подъёмом)',
+      'Прямоугольная база + арочный верх. Параметр arch_rise — подъём арки.',
+      1.3, 12000, 1, '{"arch_rise":400}'],
+    ['sh-half-circle',   'half_circle',   'Полукруглое (fan light)',
+      'Полная полуокружность — над дверью или классическое окно.',
+      1.5, 18000, 1, '{}'],
+    ['sh-triangle',      'triangle',      'Треугольное',
+      'Треугольное (мансардное). Параметр apex_x — горизонтальная позиция вершины.',
+      1.2, 0, 0, '{"apex_x":600}'],
+    ['sh-trapezoid',     'trapezoid',     'Трапециевидное',
+      'Со скосом — мансарда, наклонные террасы. Параметр left_h ≠ right_h.',
+      1.15, 0, 0, '{"left_h":1400,"right_h":1800}'],
+    ['sh-gothic',        'gothic',        'Готическое (стрельчатое)',
+      'Стрельчатый верх с пиком — готика, костёлы. Параметр peak_offset = 0.',
+      1.4, 14000, 1, '{"arch_rise":500,"peak_offset":0}'],
+    ['sh-pentagon',      'pentagon',      'Пятиугольное',
+      'Пятиугольник (домовой контур) — стилизованные окна.',
+      1.2, 0, 0, '{"peak_h":300}'],
+    ['sh-hexagon',       'hexagon',       'Шестиугольное',
+      'Декоративный шестиугольник.',
+      1.25, 0, 0, '{"side_h":400}'],
+    ['sh-oval',          'oval',          'Овальное',
+      'Эллипс (мансардное / морское). Параметры — полуоси a и b.',
+      1.5, 28000, 1, '{}'],
+    ['sh-circle',        'circle',        'Круглое (illuminator)',
+      'Окно-иллюминатор / oeil-de-boeuf. Параметр diameter.',
+      1.5, 25000, 1, '{}'],
+    ['sh-quarter-circle','quarter_circle','Четверть круга',
+      'Угловое — четверть окружности.',
+      1.4, 16000, 1, '{}'],
+    ['sh-polygon',       'polygon',       'Свободный многоугольник',
+      'Произвольный N-угольник — для нестандартных проёмов.',
+      1.3, 0, 0, '{"vertices":[[0,0],[1200,0],[1200,1800],[0,1800]]}'],
+    ['sh-bay',           'bay',           'Эркер (bay window)',
+      'Угловой выступ из 3-5 окон под углами 90°/120°/135°.',
+      1.0, 0, 0, '{"panels":3,"angle":135}'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
 
 // helpers ───────────────────────────────────────────────────────────────
 export function logEvent(actor, action, detail = '') {
