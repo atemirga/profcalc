@@ -144,7 +144,7 @@ export function calcWindow(input) {
     extras = { sill: true, ebb: true, mesh: true, install: true },
     scope,
     colorId, hardwareKitId, handleId, handleColorId,
-    doorKit,
+    doorKit, doorTypeId,
   } = input;
   const scopeSet = normalizeScope(scope);
 
@@ -364,22 +364,54 @@ export function calcWindow(input) {
     }
   }
 
-  // ── Phase 2: Door hardware kit (lock, hinge, closer, threshold, strike, etc)
+  // ── Phase 7: door type lookup (used both for kit defaults and reinforcement factor below)
+  const doorType = doorTypeId ? db.prepare('SELECT * FROM door_types WHERE id = ?').get(doorTypeId) : null;
+
+  // ── Phase 2/7: Door hardware kit (lock, hinge, closer, threshold, strike, +peephole/antipanic/bottom_bolt)
   if (doorCount > 0) {
     const dkOverride = doorKit || {};
-    // Default selection — matches the photo's invoice (DORMA bachok + tongue + TS77 + 55 GOLD + K-LONG)
-    const defaults = {
-      lockId:       'dh-lock-bachok-dorma',
-      lockTongueId: 'dh-lock-tongue-dorma',
-      cylinderId:   'dh-cyl-dorma',
-      hingeId:      'dh-hinge-hn3303-sk',
-      closerId:     'dh-closer-ts77-dorma',
-      thresholdId:  'dh-thresh-55gold',
-      strikeId:     'dh-strike-klong',
-      rosetteId:    'dh-rosette-sk',
-      fixatorId:    'dh-fixator-klong',
-      handleKitId:  'dh-handle-kit-sk',
-    };
+    // Phase 7: door-type-aware defaults — only required_components are pre-filled
+    let defaults;
+    if (doorType && doorType.required_components) {
+      let req = [];
+      try { req = JSON.parse(doorType.required_components) || []; } catch {}
+      const reqSet = new Set(req);
+      // Choose the right component for this door type (firedoor/antipanic get specialized parts)
+      const isFire = doorType.code === 'firedoor';
+      const isAnti = doorType.code === 'antipanic';
+      defaults = {
+        lockId:       reqSet.has('lock')        ? 'dh-lock-bachok-dorma' : null,
+        lockTongueId: reqSet.has('lock_tongue') ? 'dh-lock-tongue-dorma' : null,
+        cylinderId:   reqSet.has('cylinder')    ? 'dh-cyl-dorma'         : null,
+        hingeId:      reqSet.has('hinge')       ? (isFire ? 'dh-hinge-fire' : 'dh-hinge-hn3303-sk') : null,
+        closerId:     reqSet.has('closer')      ? (isFire ? 'dh-closer-hidden' : 'dh-closer-ts77-dorma') : null,
+        thresholdId:  reqSet.has('threshold')   ? (isFire ? 'dh-thresh-firedoor' : 'dh-thresh-55gold') : null,
+        strikeId:     reqSet.has('strike')      ? 'dh-strike-klong'      : null,
+        rosetteId:    reqSet.has('rosette')     ? 'dh-rosette-sk'        : null,
+        fixatorId:    reqSet.has('fixator')     ? 'dh-fixator-klong'     : null,
+        handleKitId:  reqSet.has('handle_kit')  ? 'dh-handle-kit-sk'     : null,
+        peepholeId:   reqSet.has('peephole')    ? 'dh-peephole-std'      : null,
+        antipanicId:  isAnti                    ? 'dh-antipanic-bar'     : null,
+        bottomBoltId: reqSet.has('bottom_bolt') ? 'dh-bottom-bolt'       : null,
+      };
+    } else {
+      // Legacy default — full DORMA + K-LONG kit (matches the photo invoice)
+      defaults = {
+        lockId:       'dh-lock-bachok-dorma',
+        lockTongueId: 'dh-lock-tongue-dorma',
+        cylinderId:   'dh-cyl-dorma',
+        hingeId:      'dh-hinge-hn3303-sk',
+        closerId:     'dh-closer-ts77-dorma',
+        thresholdId:  'dh-thresh-55gold',
+        strikeId:     'dh-strike-klong',
+        rosetteId:    'dh-rosette-sk',
+        fixatorId:    'dh-fixator-klong',
+        handleKitId:  'dh-handle-kit-sk',
+        peepholeId:   null,
+        antipanicId:  null,
+        bottomBoltId: null,
+      };
+    }
     const selected = { ...defaults, ...dkOverride };
     // Allow caller to disable a specific component by passing null/false
     const dhRow = (id) => id ? db.prepare('SELECT * FROM door_hardware WHERE id = ?').get(id) : null;
@@ -409,13 +441,18 @@ export function calcWindow(input) {
     dhLine(dhRow(selected.rosetteId));
     dhLine(dhRow(selected.fixatorId));
     dhLine(dhRow(selected.handleKitId));
+    dhLine(dhRow(selected.peepholeId));
+    dhLine(dhRow(selected.antipanicId));
+    dhLine(dhRow(selected.bottomBoltId));
     // Threshold — length = sum of door widths in meters
     if (doorWidthTotal > 0) dhLine(dhRow(selected.thresholdId), doorWidthTotal);
   }
 
-  // Reinforcement (steel inside profiles)
-  const reinfLen = framePerim + totalMullion + sashPerimTotal * 0.6;
-  allLines.push(tag(line('Армирование оцинк. сталь 1.5 мм', reinfLen, 'м', art('REINF-1.5'), priceLevel), 'reinforcement'));
+  // Reinforcement (steel inside profiles) — Phase 7: scaled by door type factor
+  const reinfFactor = doorType ? Number(doorType.reinforcement_factor) || 1.0 : 1.0;
+  const reinfLen = (framePerim + totalMullion + sashPerimTotal * 0.6) * reinfFactor;
+  const reinfTag = doorType && reinfFactor !== 1.0 ? ` (${doorType.name}, ×${reinfFactor})` : '';
+  allLines.push(tag(line('Армирование оцинк. сталь 1.5 мм' + reinfTag, reinfLen, 'м', art('REINF-1.5'), priceLevel), 'reinforcement'));
 
   // ── Phase 3: typed seals — CON 01/02/05/07-4/11-4 (Logikal-style)
   function sealLine(code, length) {
@@ -580,7 +617,7 @@ export function calcWindow(input) {
   const total = subtotal - discount;
 
   return {
-    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId, doorKit, turnProfile: !!input.turnProfile, frameAdapter: !!input.frameAdapter },
+    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId, doorKit, doorTypeId, turnProfile: !!input.turnProfile, frameAdapter: !!input.frameAdapter },
     geometry: {
       framePerim: +framePerim.toFixed(3),
       mullionH: +mullionH.toFixed(3),
@@ -624,6 +661,7 @@ export function calcProject(input) {
       handleId: it.handleId,
       handleColorId: it.handleColorId,
       doorKit: it.doorKit,
+      doorTypeId: it.doorTypeId,
       turnProfile: it.turnProfile,
       frameAdapter: it.frameAdapter,
     });

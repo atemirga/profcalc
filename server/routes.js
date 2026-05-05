@@ -222,6 +222,7 @@ makeCrud('door_hardware',  'id', ['id','category','vendor','name','unit','qty_pe
 makeCrud('profile_parts',  'id', ['id','system_id','kind','code','width_mm','thickness_mm','name','price_per_m']);
 makeCrud('seals',          'id', ['id','code','position','name','price_per_m']);
 makeCrud('brackets',       'id', ['id','category','code','name','unit','price_per_unit']);
+makeCrud('door_types',     'id', ['id','code','name','description','default_width','default_height','reinforcement_factor','required_components','default_opening']);
 
 // ── calc scope categories (profile / hardware / glazing / …) ───────────
 api.get('/calc/categories', (_req, res) => {
@@ -778,9 +779,15 @@ api.get('/opening-types', (_, res) => {
     { code: 'ПОЛ',       label: 'Поворотно-откидное лев.', short: '◣▽', group: 'window' },
     { code: 'ПОП',       label: 'Поворотно-откидное прав.',short: '▽◢', group: 'window' },
     { code: 'ФР',        label: 'Фрамужное',               short: '△',  group: 'window' },
-    { code: 'ДВЕРЬ-ПЛ',  label: 'Дверь левая',             short: '⇐',  group: 'door' },
-    { code: 'ДВЕРЬ-ПП',  label: 'Дверь правая',            short: '⇒',  group: 'door' },
-    { code: 'ДВЕРЬ-FIX', label: 'Дверь глухая',            short: '⊟',  group: 'door' },
+    { code: 'ДВЕРЬ-ПЛ',     label: 'Дверь левая',           short: '⇐',  group: 'door' },
+    { code: 'ДВЕРЬ-ПП',     label: 'Дверь правая',          short: '⇒',  group: 'door' },
+    { code: 'ДВЕРЬ-FIX',    label: 'Дверь глухая',          short: '⊟',  group: 'door' },
+    // ── Phase 7: extended door openings
+    { code: 'ДВЕРЬ-ШТЛ',    label: 'Штульповая ведомая',    short: '⇐⊏', group: 'door' },
+    { code: 'ДВЕРЬ-ШТП',    label: 'Штульповая ведущая',    short: '⊐⇒', group: 'door' },
+    { code: 'ДВЕРЬ-АНТП',   label: 'Антипаника',            short: '⇏',  group: 'door' },
+    { code: 'РАЗД-Л',       label: 'Раздвижная влево',      short: '⇇',  group: 'door' },
+    { code: 'РАЗД-П',       label: 'Раздвижная вправо',     short: '⇉',  group: 'door' },
   ]);
 });
 

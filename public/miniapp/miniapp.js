@@ -460,7 +460,10 @@
       body.appendChild(list);
       state.project.items.forEach((it, idx) => list.appendChild(itemCard(it, idx)));
 
-      body.appendChild(h('button', { class: 'btn btn-secondary', style: 'width:100%;margin-bottom:18px', onClick: addItem }, '+ Добавить позицию'));
+      body.appendChild(h('div', { class: 'btn-row', style: 'margin-bottom:18px' }, [
+        h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: addItem }, '+ Окно'),
+        h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: openDoorPicker }, '+ Дверь'),
+      ]));
 
       // Scope picker — choose which categories to include in the price
       body.appendChild(scopeCard());
@@ -677,6 +680,53 @@
       state.lastResult = null;
       go('edit-item');
     }
+    // ── Phase 7: dedicated door picker — opens a sheet with all door templates
+    function openDoorPicker() {
+      const doorTpls = (window.WINDOW_TEMPLATES || []).filter(t => t.category === 'door');
+      const doorTypes = state.cache.doorTypes || [];
+      sheet({
+        title: 'Выберите тип двери',
+        body: [
+          h('div', { style: 'font-size:12.5px;color:var(--muted);margin-bottom:10px;line-height:1.5' },
+            'Выберите дверь — фурнитура и комплектующие подберутся автоматически по типу (входная / балконная / штульповая / противопожарная / антипаника / французская / портал).'),
+          h('div', { class: 'templates-grid' },
+            doorTpls.map(t => {
+              const dt = doorTypes.find(d => d.id === t.doorType);
+              const card = h('div', { class: 'tpl', onClick: () => { closeSheet(); addDoorWithType(t); } }, [
+                h('div', { class: 'preview' }),
+                h('div', { class: 'name' }, t.name),
+                h('div', { class: 'sub' }, t.sub),
+                h('div', { class: 'dim' }, t.width + ' × ' + t.height + ' мм'),
+                dt && Number(dt.reinforcement_factor) > 1 ? h('div', { style: 'font-size:10px;color:var(--accent);font-weight:600;margin-top:3px' }, `Армирование ×${dt.reinforcement_factor}`) : null,
+              ]);
+              card.querySelector('.preview').appendChild(window.WindowSchema({ w: 130, h: 130, layout: t.build(), showDims: false }));
+              return card;
+            })),
+        ],
+      });
+    }
+    function addDoorWithType(tpl) {
+      const next = blankItem();
+      next.name = tpl.name + ' ' + (state.project.items.filter(i => (i.doorTypeId || (i.layout?.rows || []).some(r => r.sections.some(s => (s.opening || '').startsWith('ДВЕРЬ'))))).length + 1);
+      next.layout = tpl.build();
+      next.doorTypeId = tpl.doorType || null;
+      // Auto-clear doorKit so calc.js fills it from door_type.required_components
+      next.doorKit = {};
+      // Door-rated handle by default
+      const dt = (state.cache.doorTypes || []).find(d => d.id === tpl.doorType);
+      if (dt && dt.code === 'antipanic') {
+        next.handleId = 'hnd-antipanic';
+      } else {
+        next.handleId = 'hnd-dorma-klong';
+      }
+      next.handleColorId = 'c-7024';
+      // Door-rated hardware kit
+      next.hardwareKitId = tpl.doorType === 'dt-portal' ? 'hw-sliding-portal' : 'hw-roto-door';
+      state.project.items.push(next);
+      state.activeIdx = state.project.items.length - 1;
+      state.lastResult = null;
+      go('edit-item');
+    }
     function duplicateItem(idx) {
       const copy = JSON.parse(JSON.stringify(state.project.items[idx]));
       copy.name = copy.name + ' (копия)';
@@ -781,6 +831,7 @@
     if (!state.cache.ebbs)    state.cache.ebbs    = await api('/ebbs').catch(() => []);
     if (!state.cache.meshes)  state.cache.meshes  = await api('/meshes').catch(() => []);
     if (!state.cache.doorHw)  state.cache.doorHw  = await api('/door_hardware').catch(() => []);
+    if (!state.cache.doorTypes) state.cache.doorTypes = await api('/door_types').catch(() => []);
 
     const item = state.project.items[state.activeIdx];
     // backfill defaults for older items
@@ -962,6 +1013,39 @@
           });
         }),
       ]));
+
+      // ── Phase 7: Door type picker (entrance/balcony/shtulp/french/firedoor/antipanic/portal)
+      if (isDoor && (state.cache.doorTypes || []).length) {
+        body.appendChild(h('div', { class: 'section-label' }, 'Тип двери'));
+        const dtCard = h('div', { class: 'card list', style: 'margin-bottom:14px' });
+        // "Не задан" option
+        const none = h('div', { class: 'glaz-row' + (!item.doorTypeId ? ' sel' : ''), onClick: () => { item.doorTypeId = null; paint(); } }, [
+          h('div', { class: 'radio' }),
+          h('div', { class: 'meta' }, [
+            h('div', { class: 'label' }, 'Универсальная'),
+            h('div', { class: 'sub' }, 'Без специализации — стандартный комплект'),
+          ]),
+        ]);
+        dtCard.appendChild(none);
+        state.cache.doorTypes.forEach(dt => {
+          const sel = dt.id === item.doorTypeId;
+          dtCard.appendChild(h('div', { class: 'glaz-row' + (sel ? ' sel' : ''), onClick: () => {
+            item.doorTypeId = dt.id;
+            // Reset doorKit so calc.js applies door_type defaults on next calc
+            item.doorKit = {};
+            state._dkExpanded = false;
+            paint();
+          } }, [
+            h('div', { class: 'radio' }),
+            h('div', { class: 'meta' }, [
+              h('div', { class: 'label' }, dt.name),
+              h('div', { class: 'sub' }, dt.description || ''),
+            ]),
+            Number(dt.reinforcement_factor) > 1 ? h('div', { style: 'font-size:10.5px;color:var(--accent);font-weight:600;font-family:var(--mono)' }, '×' + dt.reinforcement_factor) : null,
+          ]));
+        });
+        body.appendChild(dtCard);
+      }
 
       // ── Phase 2 + improvement: Door hardware kit with presets (Базовый / Расширенный / Все)
       if (isDoor) {
@@ -1308,14 +1392,47 @@
       paint();
     }
     function openTemplatePicker() {
+      const filter = state._tplFilter || 'all';
+      const counts = { all: 0, window: 0, door: 0, mixed: 0 };
+      window.WINDOW_TEMPLATES.forEach(t => { counts.all++; counts[t.category]++; });
+      const tabs = [
+        ['all',    'Все',     counts.all],
+        ['window', 'Окна',    counts.window],
+        ['door',   'Двери',   counts.door],
+        ['mixed',  'Смешанные', counts.mixed],
+      ];
+      function chipBar() {
+        return h('div', { style: 'display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap' },
+          tabs.map(([k, lbl, c]) => h('button', {
+            onClick: () => { state._tplFilter = k; openTemplatePicker(); },
+            style: `padding:6px 12px;border-radius:6px;border:1.5px solid ${filter === k ? 'var(--accent)' : 'var(--rule)'};background:${filter === k ? 'var(--accent)' : '#fff'};color:${filter === k ? '#fff' : 'var(--text)'};font-size:12px;font-weight:${filter === k ? 600 : 500};cursor:pointer`,
+          }, lbl + ' (' + c + ')')));
+      }
+      const list = window.WINDOW_TEMPLATES.filter(t => filter === 'all' || t.category === filter);
       sheet({
         title: 'Выберите шаблон',
         body: [
-          h('div', { class: 'templates-grid', style: 'margin-top:10px' },
-            window.WINDOW_TEMPLATES.map(t => {
-              const card = h('div', { class: 'tpl', onClick: () => { item.layout = t.build(); state.selected = { ri: 0, ci: 0 }; closeSheet(); paint(); } }, [
-                h('div', { class: 'preview' }), h('div', { class: 'name' }, t.name),
-                h('div', { class: 'sub' }, t.sub), h('div', { class: 'dim' }, t.width + ' × ' + t.height + ' мм'),
+          chipBar(),
+          h('div', { class: 'templates-grid', style: 'margin-top:6px' },
+            list.map(t => {
+              const isDoor = t.category === 'door';
+              const card = h('div', { class: 'tpl', onClick: () => {
+                item.layout = t.build();
+                state.selected = { ri: 0, ci: 0 };
+                if (isDoor && t.doorType) {
+                  item.doorTypeId = t.doorType;
+                  item.doorKit = {};
+                  item.handleId = (t.doorType === 'dt-antipanic') ? 'hnd-antipanic' : 'hnd-dorma-klong';
+                  item.handleColorId = 'c-7024';
+                  item.hardwareKitId = t.doorType === 'dt-portal' ? 'hw-sliding-portal' : 'hw-roto-door';
+                }
+                closeSheet(); paint();
+              } }, [
+                h('div', { class: 'preview' }),
+                h('div', { class: 'name' }, t.name),
+                h('div', { class: 'sub' }, t.sub),
+                h('div', { class: 'dim' }, t.width + ' × ' + t.height + ' мм'),
+                isDoor ? h('div', { style: 'font-size:10px;color:var(--accent);font-weight:600;margin-top:2px' }, '🚪 ДВЕРЬ') : null,
               ]);
               card.querySelector('.preview').appendChild(window.WindowSchema({ w: 130, h: 90, layout: t.build(), showDims: false }));
               return card;

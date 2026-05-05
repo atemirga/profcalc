@@ -795,6 +795,16 @@
       { k: 'code', l: 'Код' }, { k: 'name', l: 'Название' },
       { k: 'unit', l: 'Ед.' }, { k: 'price_per_unit', l: 'Цена/шт', type: 'number' },
     ]},
+    { id: 'door_types',     title: 'Типы дверей',           fields: [
+      { k: 'id', l: 'ID' },
+      { k: 'code', l: 'Код', opts: ['entrance','balcony','shtulp','french','firedoor','antipanic','sliding_portal','double'] },
+      { k: 'name', l: 'Название' }, { k: 'description', l: 'Описание' },
+      { k: 'default_width', l: 'Ширина по умолч., мм', type: 'number' },
+      { k: 'default_height', l: 'Высота по умолч., мм', type: 'number' },
+      { k: 'reinforcement_factor', l: 'Коэф. армирования', type: 'number' },
+      { k: 'required_components', l: 'Обязат. компоненты (JSON)' },
+      { k: 'default_opening', l: 'Открывание по умолч.' },
+    ]},
   ];
 
   async function pageCatalogs() {

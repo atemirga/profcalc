@@ -394,10 +394,81 @@
     },
     {
       id: 'door',
-      name: 'Дверь',
-      sub: 'входная / балконная',
+      name: 'Входная одностворчатая',
+      sub: 'правое открывание',
+      category: 'door',
+      doorType: 'dt-entrance',
       width: 900, height: 2100,
       build: () => ({ width: 900, height: 2100, rows: [{ ratio: 1, sections: [{ ratio: 1, opening: 'ДВЕРЬ-ПП' }] }] }),
+    },
+    {
+      id: 'door-balcony',
+      name: 'Балконная',
+      sub: 'упрощённая фурнитура',
+      category: 'door',
+      doorType: 'dt-balcony',
+      width: 800, height: 2100,
+      build: () => ({ width: 800, height: 2100, rows: [{ ratio: 1, sections: [{ ratio: 1, opening: 'ДВЕРЬ-ПП' }] }] }),
+    },
+    {
+      id: 'door-shtulp',
+      name: 'Двойная штульповая',
+      sub: 'для широких проёмов',
+      category: 'door',
+      doorType: 'dt-shtulp',
+      width: 1600, height: 2100,
+      build: () => ({ width: 1600, height: 2100, rows: [{ ratio: 1, sections: [
+        { ratio: 1, opening: 'ДВЕРЬ-ШТЛ' }, { ratio: 1, opening: 'ДВЕРЬ-ШТП' },
+      ] }] }),
+    },
+    {
+      id: 'door-double',
+      name: 'Двустворчатая распашная',
+      sub: 'без штульпа',
+      category: 'door',
+      doorType: 'dt-double',
+      width: 1800, height: 2100,
+      build: () => ({ width: 1800, height: 2100, rows: [{ ratio: 1, sections: [
+        { ratio: 1, opening: 'ДВЕРЬ-ПЛ' }, { ratio: 1, opening: 'ДВЕРЬ-ПП' },
+      ] }] }),
+    },
+    {
+      id: 'door-firedoor',
+      name: 'Противопожарная EI60',
+      sub: 'усиленная',
+      category: 'door',
+      doorType: 'dt-firedoor',
+      width: 900, height: 2100,
+      build: () => ({ width: 900, height: 2100, rows: [{ ratio: 1, sections: [{ ratio: 1, opening: 'ДВЕРЬ-ПП' }] }] }),
+    },
+    {
+      id: 'door-antipanic',
+      name: 'Эвакуационная (антипаника)',
+      sub: 'DORMA PHA-2000',
+      category: 'door',
+      doorType: 'dt-antipanic',
+      width: 900, height: 2100,
+      build: () => ({ width: 900, height: 2100, rows: [{ ratio: 1, sections: [{ ratio: 1, opening: 'ДВЕРЬ-АНТП' }] }] }),
+    },
+    {
+      id: 'door-french',
+      name: 'Французская дверь',
+      sub: 'остеклённая, от пола до потолка',
+      category: 'door',
+      doorType: 'dt-french',
+      width: 900, height: 2400,
+      build: () => ({ width: 900, height: 2400, rows: [{ ratio: 1, sections: [{ ratio: 1, opening: 'ДВЕРЬ-ПП' }] }] }),
+    },
+    {
+      id: 'door-portal',
+      name: 'Раздвижной портал',
+      sub: 'Roto Patio Inowa',
+      category: 'door',
+      doorType: 'dt-portal',
+      width: 2400, height: 2200,
+      build: () => ({ width: 2400, height: 2200, rows: [{ ratio: 1, sections: [
+        { ratio: 1, opening: 'РАЗД-Л' }, { ratio: 1, opening: 'РАЗД-П' },
+      ] }] }),
     },
     {
       id: 'french',
@@ -505,6 +576,19 @@
     layout.rows.forEach((r, ri) => r.sections.forEach((s, ci) => out.push({ ri, ci, sec: s })));
     return out;
   }
+
+  // Auto-classify templates that don't have an explicit category:
+  // 'door' = layout contains ДВЕРЬ-* section, 'mixed' = some sections are doors, 'window' otherwise
+  WINDOW_TEMPLATES.forEach(t => {
+    if (t.category) return;
+    const sample = t.build();
+    let doorSec = 0, totalSec = 0;
+    sample.rows.forEach(r => r.sections.forEach(s => {
+      totalSec++;
+      if (s.opening && (s.opening.startsWith('ДВЕРЬ-') || s.opening.startsWith('РАЗД-'))) doorSec++;
+    }));
+    t.category = doorSec === 0 ? 'window' : (doorSec === totalSec ? 'door' : 'mixed');
+  });
 
   window.WindowSchema = WindowSchema;
   window.MiniOpeningGlyph = MiniOpeningGlyph;

@@ -268,7 +268,7 @@ CREATE TABLE IF NOT EXISTS brackets (
 -- ── PHASE 2: door hardware components (lock, hinge, closer, threshold, strike, cylinder)
 CREATE TABLE IF NOT EXISTS door_hardware (
   id TEXT PRIMARY KEY,
-  category TEXT NOT NULL,                -- 'lock' / 'lock_tongue' / 'cylinder' / 'hinge' / 'closer' / 'threshold' / 'strike' / 'rosette' / 'fixator' / 'handle_kit'
+  category TEXT NOT NULL,                -- 'lock' / 'lock_tongue' / 'cylinder' / 'hinge' / 'closer' / 'threshold' / 'strike' / 'rosette' / 'fixator' / 'handle_kit' / 'peephole' / 'antipanic' / 'bottom_bolt'
   vendor TEXT NOT NULL,                  -- DORMA / SK / Roto / K-LONG / Apecs
   name TEXT NOT NULL,                    -- 'TS77 85-100КГ' / 'Бачковый 85/35' etc
   unit TEXT NOT NULL DEFAULT 'шт',       -- шт / м / компл.
@@ -276,6 +276,19 @@ CREATE TABLE IF NOT EXISTS door_hardware (
   price INTEGER NOT NULL,
   color_default TEXT,                    -- color id (FK colors)
   notes TEXT
+);
+
+-- ── PHASE 7: door types catalog
+CREATE TABLE IF NOT EXISTS door_types (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL,                    -- 'entrance' | 'balcony' | 'shtulp' | 'french' | 'firedoor' | 'antipanic' | 'sliding_portal'
+  name TEXT NOT NULL,                    -- 'Входная одностворчатая'
+  description TEXT,
+  default_width INTEGER NOT NULL,
+  default_height INTEGER NOT NULL,
+  reinforcement_factor REAL NOT NULL DEFAULT 1.0,  -- firedoor 1.5×, antipanic 1.3×
+  required_components TEXT,              -- JSON list of door_hardware categories that MUST be in the kit
+  default_opening TEXT NOT NULL DEFAULT 'ДВЕРЬ-ПП'  -- which opening code to put in the layout
 );
 `);
 
@@ -482,12 +495,20 @@ if (isEmpty('hardware_kits')) {
 if (isEmpty('handles')) {
   const ins = db.prepare(`INSERT INTO handles (id,vendor,name,kind,color_default,price) VALUES (?,?,?,?,?,?)`);
   const seeds = [
-    ['hnd-hoppe-atlanta', 'Hoppe', 'Hoppe Atlanta',      'window', 'c-white', 4200],
-    ['hnd-hoppe-secustic','Hoppe', 'Hoppe Secustic',     'window', 'c-white', 6800],
-    ['hnd-roto-line',     'Roto',  'Roto Line',          'window', 'c-white', 3500],
-    ['hnd-roto-swing',    'Roto',  'Roto Swing',         'window', 'c-7024',  4500],
-    ['hnd-dorma-klong',   'DORMA', 'DORMA K-LONG',       'door',   'c-7024',  4725],
-    ['hnd-dorma-pure',    'DORMA', 'DORMA Pure',         'door',   'c-9005',  6200],
+    // Window handles
+    ['hnd-hoppe-atlanta', 'Hoppe', 'Hoppe Atlanta',          'window', 'c-white', 4200],
+    ['hnd-hoppe-secustic','Hoppe', 'Hoppe Secustic',         'window', 'c-white', 6800],
+    ['hnd-roto-line',     'Roto',  'Roto Line',              'window', 'c-white', 3500],
+    ['hnd-roto-swing',    'Roto',  'Roto Swing',             'window', 'c-7024',  4500],
+    // ── Phase 7: expanded door handles (нажимная / скоба / гарнитур / push-pull / ручка-кноб / антипаника)
+    ['hnd-dorma-klong',   'DORMA', 'DORMA K-LONG',           'door',   'c-7024',  4725],
+    ['hnd-dorma-pure',    'DORMA', 'DORMA Pure',             'door',   'c-9005',  6200],
+    ['hnd-hoppe-paris',   'Hoppe', 'Hoppe Paris (нажимная)', 'door',   'c-white', 5400],
+    ['hnd-hoppe-tokyo',   'Hoppe', 'Hoppe Tokyo (скоба)',    'door',   'c-9005',  8200],
+    ['hnd-dorma-pushpull','DORMA', 'DORMA Push-Pull',        'door',   'c-9005', 12400],
+    ['hnd-apecs-knob',    'Apecs', 'Apecs Ручка-кноб',       'door',   'c-7024',  3600],
+    ['hnd-roto-set',      'Roto',  'Roto Гарнитур (пара)',   'door',   'c-7024',  9800],
+    ['hnd-antipanic',     'DORMA', 'Антипаника DORMA PHA-2000','door', 'c-9005', 28000],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -547,6 +568,14 @@ if (isEmpty('door_hardware')) {
     ['dh-fixator-klong',     'fixator',      'K-LONG','Фиксатор тонкий K-LONG', 'шт', 1, 1275, 'c-7024', null],
     // handle hardware kit (фурнитура для ручки)
     ['dh-handle-kit-sk',     'handle_kit',   'SK',    'Фурнитура для ручки 7016/7024', 'компл.', 1, 10625, 'c-7024', null],
+    // ── Phase 7: extra door accessories
+    ['dh-peephole-std',      'peephole',     'Apecs', 'Глазок дверной 200°',           'шт', 1, 1800, 'c-9005', 'Стандарт'],
+    ['dh-peephole-wide',     'peephole',     'DORMA', 'Глазок широкоугольный 220°',    'шт', 1, 3400, 'c-9005', 'Премиум'],
+    ['dh-antipanic-bar',     'antipanic',    'DORMA', 'Антипаника-штанга PHA-2000',    'шт', 1, 28000, 'c-9005', 'Для эвакуац. дверей'],
+    ['dh-bottom-bolt',       'bottom_bolt',  'Apecs', 'Нижний шпингалет',              'шт', 1, 2400, 'c-9005', 'Для двойных дверей'],
+    ['dh-closer-hidden',     'closer',       'DORMA', 'Доводчик скрытый ITS96',        'шт', 1, 38000, 'c-9005', 'Скрытого монтажа'],
+    ['dh-thresh-firedoor',   'threshold',    'DORMA', 'Порог противопожарный',         'м',  1, 5800, null,    'EI60'],
+    ['dh-hinge-fire',        'hinge',        'Roto',  'Петля противопожарная',         'шт', 3, 8200, 'c-9016', 'Для противопож. дверей'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -620,6 +649,55 @@ if (isEmpty('brackets')) {
     // Frame anchor / труба армирования
     ['br-tube-40x2',   'frame_anchor', '101-00', 'Труба арм. 40×2 ALP',      'шт', 3550],
     ['br-glue-pur',    'consumable',  '026-10-14-23', 'Клей Пурокол 310 мл', 'шт', 4665],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+// ── Phase 7 seeds: door types ─────────────────────────────────────────
+if (isEmpty('door_types')) {
+  const ins = db.prepare(`INSERT INTO door_types (id,code,name,description,default_width,default_height,reinforcement_factor,required_components,default_opening) VALUES (?,?,?,?,?,?,?,?,?)`);
+  const seeds = [
+    ['dt-entrance',  'entrance',       'Входная одностворчатая',
+      'Стандартная входная дверь с замком, личинкой, петлями, доводчиком, порогом',
+      900, 2100, 1.0,
+      JSON.stringify(['lock','cylinder','hinge','closer','threshold','handle_kit']),
+      'ДВЕРЬ-ПП'],
+    ['dt-balcony',   'balcony',        'Балконная дверь',
+      'Балконный блок — с фрамугой или без, упрощённая фурнитура',
+      800, 2100, 1.0,
+      JSON.stringify(['lock','hinge','threshold','handle_kit']),
+      'ДВЕРЬ-ПП'],
+    ['dt-shtulp',    'shtulp',         'Двойная штульповая',
+      'Двухстворчатая со штульпом — для широких проёмов; нижний шпингалет на ведомой створке',
+      1600, 2100, 1.1,
+      JSON.stringify(['lock','lock_tongue','cylinder','hinge','closer','threshold','strike','bottom_bolt','handle_kit']),
+      'ДВЕРЬ-ПЛ'],
+    ['dt-french',    'french',         'Французская (от пола до потолка)',
+      'Высокая остеклённая дверь с большим стеклопакетом, без верхней фрамуги',
+      900, 2400, 1.0,
+      JSON.stringify(['lock','cylinder','hinge','threshold','handle_kit']),
+      'ДВЕРЬ-ПП'],
+    ['dt-firedoor',  'firedoor',       'Противопожарная EI60',
+      'Усиленное армирование 1.5×, противопожарные петли + порог + доводчик',
+      900, 2100, 1.5,
+      JSON.stringify(['lock','cylinder','hinge','closer','threshold','strike','handle_kit']),
+      'ДВЕРЬ-ПП'],
+    ['dt-antipanic', 'antipanic',      'Эвакуационная (антипаника)',
+      'Дверь с системой антипаника DORMA PHA-2000, для общественных зданий',
+      900, 2100, 1.3,
+      JSON.stringify(['antipanic','cylinder','hinge','closer','threshold','strike']),
+      'ДВЕРЬ-ПП'],
+    ['dt-portal',    'sliding_portal', 'Раздвижная (Portal)',
+      'Параллельно-раздвижная дверь Roto Patio Inowa — для больших проёмов и террас',
+      2400, 2200, 1.2,
+      JSON.stringify(['hinge','threshold','handle_kit']),
+      'РАЗД-П'],
+    ['dt-double',    'double',         'Двустворчатая распашная',
+      'Двойная дверь без штульпа — обе створки распашные',
+      1800, 2100, 1.1,
+      JSON.stringify(['lock','cylinder','hinge','closer','threshold','strike','bottom_bolt','handle_kit']),
+      'ДВЕРЬ-ПЛ'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
