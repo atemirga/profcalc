@@ -1,0 +1,356 @@
+// server/db.js — SQLite schema + seed data drawn from the ProfCalc TZ
+import Database from 'better-sqlite3';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.resolve(__dirname, '..', 'data');
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_PATH = path.join(DATA_DIR, 'profcalc.db');
+
+export const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('foreign_keys = ON');
+
+db.exec(`
+CREATE TABLE IF NOT EXISTS profile_systems (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  vendor TEXT NOT NULL,
+  chambers INTEGER NOT NULL,
+  depth INTEGER NOT NULL,
+  material TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS glazing (
+  id TEXT PRIMARY KEY,
+  formula TEXT NOT NULL,
+  thickness INTEGER NOT NULL,
+  label TEXT NOT NULL,
+  price INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS manufacturers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  region TEXT NOT NULL,
+  systems TEXT NOT NULL,         -- JSON array of profile_system ids
+  rating REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active'
+);
+
+CREATE TABLE IF NOT EXISTS installers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  city TEXT NOT NULL,
+  verified INTEGER NOT NULL DEFAULT 0,
+  calcs INTEGER NOT NULL DEFAULT 0,
+  telegram_id INTEGER UNIQUE,
+  bin TEXT,
+  phone TEXT,
+  role TEXT NOT NULL DEFAULT 'okonshchik',  -- okonshchik | prorab | tsekh
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+  telegram_id INTEGER PRIMARY KEY,
+  name TEXT,
+  city TEXT,
+  phone TEXT,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS discounts (
+  installer_id TEXT NOT NULL,
+  manufacturer_id TEXT NOT NULL,
+  pct INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (installer_id, manufacturer_id)
+);
+
+CREATE TABLE IF NOT EXISTS articles (
+  article TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  unit TEXT NOT NULL,
+  base INTEGER NOT NULL,
+  dealer INTEGER NOT NULL,
+  retail INTEGER NOT NULL,
+  system TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calculations (
+  id TEXT PRIMARY KEY,
+  installer_id TEXT,
+  telegram_id INTEGER,
+  width INTEGER NOT NULL,
+  height INTEGER NOT NULL,
+  sections TEXT NOT NULL,        -- JSON array of opening type codes (legacy/summary)
+  layout TEXT,                   -- JSON full rows × sections layout
+  glazing TEXT NOT NULL,
+  system TEXT NOT NULL,
+  manufacturer_id TEXT,
+  total INTEGER NOT NULL,
+  breakdown TEXT NOT NULL,       -- JSON
+  title TEXT,
+  template_id TEXT,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
+CREATE TABLE IF NOT EXISTS log_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  actor TEXT NOT NULL,           -- 'admin' / installer_id / telegram_id
+  action TEXT NOT NULL,
+  detail TEXT
+);
+
+CREATE TABLE IF NOT EXISTS kp_documents (
+  id TEXT PRIMARY KEY,
+  number TEXT NOT NULL,
+  calc_id TEXT,
+  project_id TEXT,
+  client_name TEXT NOT NULL,
+  client_address TEXT,
+  client_phone TEXT,
+  installer_id TEXT,
+  total INTEGER NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+`);
+
+// ── seed only if tables are empty ──────────────────────────────────────
+function isEmpty(table) {
+  return db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c === 0;
+}
+
+if (isEmpty('profile_systems')) {
+  const ins = db.prepare(`INSERT INTO profile_systems (id,name,vendor,chambers,depth,material) VALUES (?,?,?,?,?,?)`);
+  const seeds = [
+    ['rehau-delight-70', 'Rehau Delight 70', 'Rehau', 5, 70, 'ПВХ'],
+    ['rehau-grazio-70',  'Rehau Grazio 70',  'Rehau', 5, 70, 'ПВХ'],
+    ['kbe-70-expert',    'KBE 70 Expert',    'KBE',   5, 70, 'ПВХ'],
+    ['veka-softline-82', 'VEKA Softline 82', 'VEKA',  7, 82, 'ПВХ'],
+    ['salamander-82',    'Salamander bluEvolution 82', 'Salamander', 6, 82, 'ПВХ'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+if (isEmpty('glazing')) {
+  const ins = db.prepare(`INSERT INTO glazing (id,formula,thickness,label,price) VALUES (?,?,?,?,?)`);
+  const seeds = [
+    ['g-4-16-4',         '4-16-4',         24, 'Однокамерный', 3500],
+    ['g-4-10-4-10-4',    '4-10-4-10-4',    32, 'Двухкамерный стандарт', 5000],
+    ['g-4-14ar-4i',      '4-14Ar-4И',      22, 'Энергосберегающий (i + Ar)', 6500],
+    ['g-4-10-4-10-4i',   '4-10-4-10-4И',   32, 'Двухкамерный энергосберег.', 7000],
+    ['g-4mf-10-4-10-4',  '4MF-10-4-10-4',  32, 'Мультифункциональный', 8000],
+    ['g-6-12-4-12-6',    '6-12-4-12-6',    40, 'Шумозащитный', 9500],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+if (isEmpty('manufacturers')) {
+  const ins = db.prepare(`INSERT INTO manufacturers (id,name,region,systems,rating,status) VALUES (?,?,?,?,?,?)`);
+  const seeds = [
+    ['m-rehau',      'Rehau KZ',           'Алматы, Астана',   '["rehau-delight-70","rehau-grazio-70"]', 4.8, 'active'],
+    ['m-kbe',        'KBE Profile',        'Алматы',            '["kbe-70-expert"]',                      4.6, 'active'],
+    ['m-veka',       'VEKA Central Asia',  'РК',                '["veka-softline-82"]',                   4.7, 'active'],
+    ['m-salamander', 'Salamander KZ',      'Алматы, Шымкент',   '["salamander-82"]',                      4.5, 'active'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+if (isEmpty('installers')) {
+  const ins = db.prepare(`INSERT INTO installers (id,name,city,verified,calcs,bin,phone,role) VALUES (?,?,?,?,?,?,?,?)`);
+  const seeds = [
+    ['i-okna-almaty',  'Окна Алматы ИП', 'Алматы',   1, 142, '970324300892', '+7 727 312 84 50', 'okonshchik'],
+    ['i-bestwindow',   'BestWindow ТОО', 'Алматы',   1, 98,  '180440017234', '+7 727 244 11 02', 'tsekh'],
+    ['i-prorab-serik', 'Прораб Серик',   'Шымкент',  1, 47,  '850912300455', '+7 705 332 00 17', 'prorab'],
+    ['i-windline',     'WindLine KZ',    'Астана',   0, 18,  null,            '+7 717 211 88 99', 'okonshchik'],
+    ['i-domokno',      'Дом Окно',       'Караганда',1, 31,  '210830450291', '+7 721 244 60 13', 'okonshchik'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+// add role column to existing DBs (idempotent migration)
+try {
+  const cols = db.prepare("PRAGMA table_info(installers)").all().map(c => c.name);
+  if (!cols.includes('role')) {
+    db.exec("ALTER TABLE installers ADD COLUMN role TEXT NOT NULL DEFAULT 'okonshchik'");
+  }
+} catch {}
+try {
+  const cols = db.prepare("PRAGMA table_info(calculations)").all().map(c => c.name);
+  if (!cols.includes('layout')) db.exec("ALTER TABLE calculations ADD COLUMN layout TEXT");
+  if (!cols.includes('template_id')) db.exec("ALTER TABLE calculations ADD COLUMN template_id TEXT");
+} catch {}
+
+// notifications inbox
+db.exec(`CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  recipient TEXT NOT NULL,             -- 'tg:<id>' or 'i:<installer_id>'
+  ts INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  kind TEXT NOT NULL,                  -- 'kp.created' / 'order.update' / 'discount.changed' / 'system'
+  title TEXT NOT NULL,
+  body TEXT,
+  link TEXT,
+  read INTEGER NOT NULL DEFAULT 0
+)`);
+
+// favorites
+db.exec(`CREATE TABLE IF NOT EXISTS favorites (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner TEXT NOT NULL,                 -- 'tg:<id>' or 'i:<installer_id>'
+  calc_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  UNIQUE(owner, calc_id)
+)`);
+
+// orders (lead from client to installer)
+db.exec(`CREATE TABLE IF NOT EXISTS orders (
+  id TEXT PRIMARY KEY,
+  calc_id TEXT,
+  project_id TEXT,
+  kp_id TEXT,
+  client_name TEXT,
+  client_phone TEXT,
+  client_address TEXT,
+  client_telegram_id INTEGER,
+  installer_id TEXT,
+  status TEXT NOT NULL DEFAULT 'new', -- new / contacted / measuring / production / installation / done / cancelled
+  comment TEXT,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+)`);
+try {
+  const cols = db.prepare("PRAGMA table_info(orders)").all().map(c => c.name);
+  if (!cols.includes('project_id')) db.exec("ALTER TABLE orders ADD COLUMN project_id TEXT");
+} catch {}
+
+// CLIENTS — local CRM book (per-installer or shared) — distinct from auth-clients
+db.exec(`CREATE TABLE IF NOT EXISTS crm_clients (
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,        -- 'i:<installer_id>' or 'tg:<id>'
+  name TEXT NOT NULL,
+  phone TEXT,
+  address TEXT,
+  email TEXT,
+  notes TEXT,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+)`);
+
+// PROJECTS — multi-window calculation aggregating multiple items
+db.exec(`CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  owner TEXT NOT NULL,             -- 'i:<id>' or 'tg:<id>'
+  installer_id TEXT,
+  client_id TEXT,                  -- references crm_clients.id (optional)
+  client_name TEXT,
+  client_phone TEXT,
+  client_address TEXT,
+  name TEXT NOT NULL,              -- project label
+  items TEXT NOT NULL,             -- JSON array of items
+  totals TEXT,                     -- JSON { subtotal, discount, total, perItem }
+  manufacturer_id TEXT,
+  status TEXT NOT NULL DEFAULT 'draft',  -- draft / quoted / ordered / done
+  markup_pct REAL NOT NULL DEFAULT 0,    -- installer markup applied to subtotal
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+)`);
+try {
+  const cols = db.prepare("PRAGMA table_info(projects)").all().map(c => c.name);
+  if (!cols.includes('markup_pct')) db.exec("ALTER TABLE projects ADD COLUMN markup_pct REAL NOT NULL DEFAULT 0");
+} catch {}
+// Personal markup belongs to the installer's profile (not per-project)
+try {
+  const cols = db.prepare("PRAGMA table_info(installers)").all().map(c => c.name);
+  if (!cols.includes('markup_pct')) db.exec("ALTER TABLE installers ADD COLUMN markup_pct REAL NOT NULL DEFAULT 0");
+} catch {}
+
+// KP — link to projects too, and relax calc_id NOT NULL constraint
+try {
+  const cols = db.prepare("PRAGMA table_info(kp_documents)").all();
+  const colNames = cols.map(c => c.name);
+  if (!colNames.includes('project_id')) db.exec("ALTER TABLE kp_documents ADD COLUMN project_id TEXT");
+  // SQLite can't ALTER COLUMN; recreate the table if calc_id is still NOT NULL
+  const calcCol = cols.find(c => c.name === 'calc_id');
+  if (calcCol && calcCol.notnull === 1) {
+    db.exec(`
+      CREATE TABLE kp_documents__new (
+        id TEXT PRIMARY KEY,
+        number TEXT NOT NULL,
+        calc_id TEXT,
+        project_id TEXT,
+        client_name TEXT NOT NULL,
+        client_address TEXT,
+        client_phone TEXT,
+        installer_id TEXT,
+        total INTEGER NOT NULL,
+        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+      );
+      INSERT INTO kp_documents__new (id, number, calc_id, project_id, client_name, client_address, installer_id, total, created_at)
+        SELECT id, number, calc_id, project_id, client_name, client_address, installer_id, total, created_at FROM kp_documents;
+      DROP TABLE kp_documents;
+      ALTER TABLE kp_documents__new RENAME TO kp_documents;
+    `);
+  } else if (!colNames.includes('client_phone')) {
+    db.exec("ALTER TABLE kp_documents ADD COLUMN client_phone TEXT");
+  }
+} catch (e) { console.error('kp_documents migration failed:', e.message); }
+
+if (isEmpty('discounts')) {
+  const ins = db.prepare(`INSERT INTO discounts (installer_id,manufacturer_id,pct) VALUES (?,?,?)`);
+  const seeds = [
+    ['i-okna-almaty',  'm-rehau', 8],  ['i-okna-almaty',  'm-kbe', 5], ['i-okna-almaty',  'm-veka', 3], ['i-okna-almaty',  'm-salamander', 0],
+    ['i-bestwindow',   'm-rehau', 10], ['i-bestwindow',   'm-kbe', 7], ['i-bestwindow',   'm-veka', 5], ['i-bestwindow',   'm-salamander', 3],
+    ['i-prorab-serik', 'm-rehau', 5],  ['i-prorab-serik', 'm-kbe', 3], ['i-prorab-serik', 'm-veka', 0], ['i-prorab-serik', 'm-salamander', 0],
+    ['i-windline',     'm-rehau', 0],  ['i-windline',     'm-kbe', 0], ['i-windline',     'm-veka', 0], ['i-windline',     'm-salamander', 0],
+    ['i-domokno',      'm-rehau', 4],  ['i-domokno',      'm-kbe', 2], ['i-domokno',      'm-veka', 0], ['i-domokno',      'm-salamander', 0],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+if (isEmpty('articles')) {
+  const ins = db.prepare(`INSERT INTO articles (article,name,unit,base,dealer,retail,system) VALUES (?,?,?,?,?,?,?)`);
+  const seeds = [
+    ['REH-DEL-FRAME',    'Rehau Delight 70 · рама',     'м',      2350, 2680, 3200, 'Rehau Delight 70'],
+    ['REH-DEL-SASH',     'Rehau Delight 70 · створка',  'м',      2810, 3210, 3850, 'Rehau Delight 70'],
+    ['REH-DEL-MULL',     'Rehau Delight 70 · импост',   'м',      2120, 2420, 2900, 'Rehau Delight 70'],
+    ['REH-DEL-BEAD',     'Rehau Delight 70 · штапик',   'м',       480,  550,  650, 'Rehau Delight 70'],
+    ['REH-GRZ-FRAME',    'Rehau Grazio 70 · рама',      'м',      2480, 2820, 3380, 'Rehau Grazio 70'],
+    ['REH-GRZ-SASH',     'Rehau Grazio 70 · створка',   'м',      2950, 3370, 4040, 'Rehau Grazio 70'],
+    ['KBE-EXP-FRAME',    'KBE 70 Expert · рама',        'м',      2150, 2480, 2950, 'KBE 70 Expert'],
+    ['KBE-EXP-SASH',     'KBE 70 Expert · створка',     'м',      2580, 2960, 3550, 'KBE 70 Expert'],
+    ['KBE-EXP-MULL',     'KBE 70 Expert · импост',      'м',      1980, 2270, 2700, 'KBE 70 Expert'],
+    ['VEK-SOFT-FRAME',   'VEKA Softline 82 · рама',     'м',      2680, 3080, 3700, 'VEKA Softline 82'],
+    ['VEK-SOFT-SASH',    'VEKA Softline 82 · створка',  'м',      3120, 3580, 4290, 'VEKA Softline 82'],
+    ['SAL-BLU-FRAME',    'Salamander 82 · рама',        'м',      2820, 3240, 3880, 'Salamander bluEvolution 82'],
+    ['SAL-BLU-SASH',     'Salamander 82 · створка',     'м',      3320, 3810, 4570, 'Salamander bluEvolution 82'],
+    ['GLZ-4-16-4',       'СП 4-16-4',                   'м²',     2900, 3360, 3780, 'Стеклопакеты'],
+    ['GLZ-4-10-4-10-4',  'СП 4-10-4-10-4',              'м²',     4200, 4900, 5500, 'Стеклопакеты'],
+    ['GLZ-4-10-4-10-4I', 'СП 4-10-4-10-4И (низкоэм.)',  'м²',     5800, 6650, 7200, 'Стеклопакеты'],
+    ['GLZ-4MF-10-4-10-4','СП 4MF-10-4-10-4',            'м²',     6700, 7700, 8500, 'Стеклопакеты'],
+    ['GLZ-6-12-4-12-6',  'СП 6-12-4-12-6 шумозащитный', 'м²',     7900, 9080, 9950, 'Стеклопакеты'],
+    ['HW-ROTO-NT-PO',    'Roto NT · комплект ПО',       'компл.', 16800,19200,23000, 'Фурнитура'],
+    ['HW-ROTO-NT-FIX',   'Roto NT · фиксированный',     'компл.',  4200, 4830, 5780, 'Фурнитура'],
+    ['HW-MACO-PO',       'Maco · комплект ПО',          'компл.', 14500,16700,20000, 'Фурнитура'],
+    ['REINF-1.5',        'Армирование оцинк. ст. 1.5мм','м',       420,  500,  600,  'Армирование'],
+    ['SEAL-EPDM',        'Уплотнитель EPDM',            'м',       180,  220,  290,  'Уплотнители'],
+    ['SILL-MOELLER-250', 'Подоконник Moeller 250 мм',   'м',      3500, 4000, 4750, 'Доп. комплектующие'],
+    ['EBB-150',          'Отлив оцинк. 150 мм',         'м',      1200, 1380, 1620, 'Доп. комплектующие'],
+    ['MESH-FRAME',       'Москитная сетка рамочная',    'шт',     5400, 6150, 7300, 'Доп. комплектующие'],
+    ['INSTALL',          'Монтаж',                      'объект', 14000,16000,18000, 'Услуги'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+// helpers ───────────────────────────────────────────────────────────────
+export function logEvent(actor, action, detail = '') {
+  db.prepare(`INSERT INTO log_events (actor,action,detail) VALUES (?,?,?)`).run(String(actor), action, detail);
+}
+
+export default db;

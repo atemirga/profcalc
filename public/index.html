@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>ProfCalc · Платформа PLUR Solutions</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #f0eee9; font-family: 'Inter', system-ui, sans-serif; color: #1f1d1a; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 80px 24px; }
+  h1 { font-size: 36px; letter-spacing: -1px; margin: 0 0 8px; }
+  .sub { color: #7a756c; font-size: 16px; margin: 0 0 40px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  a.card {
+    display: block; padding: 28px 26px; background: #fff; border-radius: 16px; text-decoration: none; color: inherit;
+    border: 1px solid rgba(40,30,20,.08); transition: transform .15s ease, box-shadow .15s ease;
+  }
+  a.card:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(40,30,20,.12); }
+  .num { font-family: 'JetBrains Mono', ui-monospace, monospace; color: #b56b3a; font-weight: 700; font-size: 11px; letter-spacing: .5px; text-transform: uppercase; }
+  .card h2 { font-size: 20px; letter-spacing: -.4px; margin: 6px 0 4px; }
+  .card p { color: #7a756c; font-size: 14px; line-height: 1.5; margin: 0 0 12px; }
+  .card span { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #b56b3a; font-weight: 600; }
+  .footer { margin-top: 48px; color: #b3aea3; font-size: 12px; font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="num">PLUR Solutions · Алматы</div>
+  <h1>ProfCalc</h1>
+  <p class="sub">SaaS для расчёта оконных, дверных и витражных конструкций. Telegram Mini App для оконщиков, веб-суперадминка для команды PLUR.</p>
+  <div class="grid">
+    <a class="card" href="/admin/">
+      <div class="num">01 · Веб-суперадминка</div>
+      <h2>Управление платформой</h2>
+      <p>Производители, цены (3 уровня), скидочная матрица, оконщики, аналитика, журнал событий.</p>
+      <span>/admin →</span>
+    </a>
+    <a class="card" href="/miniapp/">
+      <div class="num">02 · Telegram Mini App</div>
+      <h2>Конструктор и расчёт</h2>
+      <p>Главная, конструктор окна, сравнение производителей, результат, коммерческое предложение.</p>
+      <span>/miniapp →</span>
+    </a>
+  </div>
+  <div class="footer">API: <a href="/api/manufacturers" style="color:#b56b3a">/api/manufacturers</a> · /api/articles · /api/calc · /api/analytics</div>
+</div>
+</body>
+</html>
