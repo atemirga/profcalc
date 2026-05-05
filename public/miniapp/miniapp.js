@@ -694,6 +694,7 @@
     if (!state.cache.sills)   state.cache.sills   = await api('/sills').catch(() => []);
     if (!state.cache.ebbs)    state.cache.ebbs    = await api('/ebbs').catch(() => []);
     if (!state.cache.meshes)  state.cache.meshes  = await api('/meshes').catch(() => []);
+    if (!state.cache.doorHw)  state.cache.doorHw  = await api('/door_hardware').catch(() => []);
 
     const item = state.project.items[state.activeIdx];
     // backfill defaults for older items
@@ -875,6 +876,48 @@
           });
         }),
       ]));
+
+      // ── Phase 2: Door hardware kit (only when layout contains a door)
+      if (isDoor) {
+        if (!item.doorKit) item.doorKit = {};
+        const dk = item.doorKit;
+        const dhByCat = {};
+        state.cache.doorHw.forEach(d => { (dhByCat[d.category] = dhByCat[d.category] || []).push(d); });
+        const catKey = {
+          lock: 'lockId', lock_tongue: 'lockTongueId', cylinder: 'cylinderId',
+          hinge: 'hingeId', closer: 'closerId', threshold: 'thresholdId',
+          strike: 'strikeId', rosette: 'rosetteId', fixator: 'fixatorId', handle_kit: 'handleKitId',
+        };
+        const catLabel = {
+          lock: 'Замок основной', lock_tongue: 'Замок язычковый', cylinder: 'Личинка',
+          hinge: 'Петли (3 шт)', closer: 'Доводчик', threshold: 'Порог (по ширине двери)',
+          strike: 'Ответная планка', rosette: 'Розетка', fixator: 'Фиксатор', handle_kit: 'Фурнитура для ручки',
+        };
+        const catDefaults = {
+          lock: 'dh-lock-bachok-dorma', lock_tongue: 'dh-lock-tongue-dorma', cylinder: 'dh-cyl-dorma',
+          hinge: 'dh-hinge-hn3303-sk', closer: 'dh-closer-ts77-dorma', threshold: 'dh-thresh-55gold',
+          strike: 'dh-strike-klong', rosette: 'dh-rosette-sk', fixator: 'dh-fixator-klong', handle_kit: 'dh-handle-kit-sk',
+        };
+        body.appendChild(h('div', { class: 'section-label' }, 'Дверной комплект'));
+        const dCard = h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-direction:column;gap:10px' });
+        Object.keys(catLabel).forEach(cat => {
+          const opts = dhByCat[cat] || [];
+          if (!opts.length) return;
+          const curId = dk[catKey[cat]] !== undefined ? dk[catKey[cat]] : catDefaults[cat];
+          const sel = h('select', { style: 'flex:1;padding:7px 9px;border:1px solid var(--rule);border-radius:7px;font-size:12.5px;background:#fff' }, [
+            h('option', { value: '' }, '— не нужно —'),
+            ...opts.map(o => h('option', { value: o.id, selected: o.id === curId ? 'selected' : null },
+              `${o.vendor} · ${o.name} · ${fmtNum(o.price)} ₸/${o.unit}`)),
+          ]);
+          sel.value = curId || '';
+          sel.addEventListener('change', () => { dk[catKey[cat]] = sel.value || null; paint(); });
+          dCard.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+            h('div', { style: 'width:130px;font-size:12px;color:var(--muted);font-weight:500' }, catLabel[cat]),
+            sel,
+          ]));
+        });
+        body.appendChild(dCard);
+      }
 
       // Extras
       body.appendChild(h('div', { class: 'section-label' }, 'Дополнительно'));

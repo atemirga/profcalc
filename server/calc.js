@@ -108,6 +108,11 @@ function legacyToLayout(sections, width, height) {
  * @param {string} [input.hardwareKitId] — window hardware kit
  * @param {string} [input.handleId]    — window/door handle
  * @param {string} [input.handleColorId]
+ * @param {object} [input.doorKit] — door hardware overrides:
+ *   { lockId, lockTongueId, cylinderId, hingeId, closerId, thresholdId,
+ *     strikeId, rosetteId, fixatorId, handleKitId }
+ *   When omitted for a layout that has doors, default kit is auto-selected
+ *   (DORMA bachok lock + tongue + TS77 closer + 55 GOLD threshold + K-LONG strike).
  */
 export function calcWindow(input) {
   const {
@@ -116,6 +121,7 @@ export function calcWindow(input) {
     extras = { sill: true, ebb: true, mesh: true, install: true },
     scope,
     colorId, hardwareKitId, handleId, handleColorId,
+    doorKit,
   } = input;
   const scopeSet = normalizeScope(scope);
 
@@ -156,6 +162,7 @@ export function calcWindow(input) {
   let doorCount = 0;
   let slidingCount = 0;
   let totalSections = 0;
+  let doorWidthTotal = 0;  // sum of door section widths (m) — for threshold length
 
   layout.rows.forEach((row, ri) => {
     const rowH = rowHs[ri];
@@ -174,7 +181,7 @@ export function calcWindow(input) {
         sashPerimTotal += sashPerim;
         glazingArea += Math.max(0, (sw - 2 * sashFrameInset)) * Math.max(0, (rowH - 2 * sashFrameInset));
         openCount++;
-        if (isDoor(code)) doorCount++;
+        if (isDoor(code)) { doorCount++; doorWidthTotal += sw; }
         if (isSliding(code)) slidingCount++;
       }
     });
@@ -275,6 +282,55 @@ export function calcWindow(input) {
         }, 'hardware'));
       }
     }
+  }
+
+  // ── Phase 2: Door hardware kit (lock, hinge, closer, threshold, strike, etc)
+  if (doorCount > 0) {
+    const dkOverride = doorKit || {};
+    // Default selection — matches the photo's invoice (DORMA bachok + tongue + TS77 + 55 GOLD + K-LONG)
+    const defaults = {
+      lockId:       'dh-lock-bachok-dorma',
+      lockTongueId: 'dh-lock-tongue-dorma',
+      cylinderId:   'dh-cyl-dorma',
+      hingeId:      'dh-hinge-hn3303-sk',
+      closerId:     'dh-closer-ts77-dorma',
+      thresholdId:  'dh-thresh-55gold',
+      strikeId:     'dh-strike-klong',
+      rosetteId:    'dh-rosette-sk',
+      fixatorId:    'dh-fixator-klong',
+      handleKitId:  'dh-handle-kit-sk',
+    };
+    const selected = { ...defaults, ...dkOverride };
+    // Allow caller to disable a specific component by passing null/false
+    const dhRow = (id) => id ? db.prepare('SELECT * FROM door_hardware WHERE id = ?').get(id) : null;
+    const dhLine = (row, qtyMultiplier = 1) => {
+      if (!row) return;
+      // qty: per-door * doorCount * qtyMultiplier (threshold uses multiplier=doorWidth)
+      const qty = row.unit === 'м'
+        ? +(qtyMultiplier).toFixed(2)
+        : +(row.qty_per_door * doorCount * qtyMultiplier).toFixed(2);
+      const unitPrice = Math.round(row.price * priceMultiplier(priceLevel));
+      const colorTag = row.color_default ? (() => {
+        const c = db.prepare('SELECT * FROM colors WHERE id = ?').get(row.color_default);
+        return c ? ' · ' + c.ral : '';
+      })() : '';
+      allLines.push(tag({
+        label: `${row.vendor} · ${row.name}${colorTag}` + (doorCount > 1 ? ` (×${doorCount} двери)` : ''),
+        qty: qty + ' ' + row.unit, qtyNum: qty, unit: row.unit,
+        article: row.id, unitPrice, price: Math.round(qty * unitPrice),
+      }, 'hardware'));
+    };
+    dhLine(dhRow(selected.lockId));
+    dhLine(dhRow(selected.lockTongueId));
+    dhLine(dhRow(selected.cylinderId));
+    dhLine(dhRow(selected.hingeId));               // qty_per_door=3 → 3×doorCount
+    dhLine(dhRow(selected.closerId));
+    dhLine(dhRow(selected.strikeId));               // qty_per_door=2
+    dhLine(dhRow(selected.rosetteId));
+    dhLine(dhRow(selected.fixatorId));
+    dhLine(dhRow(selected.handleKitId));
+    // Threshold — length = sum of door widths in meters
+    if (doorWidthTotal > 0) dhLine(dhRow(selected.thresholdId), doorWidthTotal);
   }
 
   // Reinforcement
@@ -393,7 +449,7 @@ export function calcWindow(input) {
   const total = subtotal - discount;
 
   return {
-    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId },
+    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId, doorKit },
     geometry: {
       framePerim: +framePerim.toFixed(3),
       mullionH: +mullionH.toFixed(3),
@@ -436,6 +492,7 @@ export function calcProject(input) {
       hardwareKitId: it.hardwareKitId,
       handleId: it.handleId,
       handleColorId: it.handleColorId,
+      doorKit: it.doorKit,
     });
     const qty = it.qty || 1;
     perItem.push({

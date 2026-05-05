@@ -236,6 +236,19 @@ CREATE TABLE IF NOT EXISTS meshes (
   price_per_unit INTEGER NOT NULL,       -- цена за шт
   unit TEXT NOT NULL DEFAULT 'шт'
 );
+
+-- ── PHASE 2: door hardware components (lock, hinge, closer, threshold, strike, cylinder)
+CREATE TABLE IF NOT EXISTS door_hardware (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL,                -- 'lock' / 'lock_tongue' / 'cylinder' / 'hinge' / 'closer' / 'threshold' / 'strike' / 'rosette' / 'fixator' / 'handle_kit'
+  vendor TEXT NOT NULL,                  -- DORMA / SK / Roto / K-LONG / Apecs
+  name TEXT NOT NULL,                    -- 'TS77 85-100КГ' / 'Бачковый 85/35' etc
+  unit TEXT NOT NULL DEFAULT 'шт',       -- шт / м / компл.
+  qty_per_door REAL NOT NULL DEFAULT 1,  -- how many per door (e.g. 3 hinges, 1 lock, 1 closer)
+  price INTEGER NOT NULL,
+  color_default TEXT,                    -- color id (FK colors)
+  notes TEXT
+);
 `);
 
 // notifications inbox
@@ -470,6 +483,38 @@ if (isEmpty('ebbs')) {
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
 }
+if (isEmpty('door_hardware')) {
+  const ins = db.prepare(`INSERT INTO door_hardware (id,category,vendor,name,unit,qty_per_door,price,color_default,notes) VALUES (?,?,?,?,?,?,?,?,?)`);
+  const seeds = [
+    // locks (drawn from the order invoice on the photo)
+    ['dh-lock-bachok-dorma', 'lock',         'DORMA', 'Замок бачковый 85/35',   'шт', 1, 4500, 'c-7024', 'Основной замок двери'],
+    ['dh-lock-tongue-dorma', 'lock_tongue',  'DORMA', 'Замок язычковый 85/35',  'шт', 1, 1700, 'c-7024', 'Дополнительный'],
+    ['dh-lock-apecs',        'lock',         'Apecs', 'Apecs 8200/85-C',         'шт', 1, 6800, 'c-9005', 'Альтернатива'],
+    // cylinder (личинка)
+    ['dh-cyl-dorma',         'cylinder',     'DORMA', 'Личинка DORMA 35×35',    'шт', 1, 3800, 'c-9005', null],
+    ['dh-cyl-kale',          'cylinder',     'KALE',  'Личинка KALE 35×35',     'шт', 1, 2400, 'c-9005', null],
+    // hinges (петли)
+    ['dh-hinge-hn3303-sk',   'hinge',        'SK',    'Петля HN-3303 7016/7024','шт', 3, 4258.75, 'c-7024', '3 петли на дверь'],
+    ['dh-hinge-roto-3d',     'hinge',        'Roto',  'Петля Roto 3D',          'шт', 3, 5400, 'c-9016', null],
+    // door closer (доводчик)
+    ['dh-closer-ts77-dorma', 'closer',       'DORMA', 'Доводчик TS77 85-100КГ', 'шт', 1, 11900, 'c-9005', 'Чёрный (RAL 9005)'],
+    ['dh-closer-ts73-dorma', 'closer',       'DORMA', 'Доводчик TS73 60-80КГ',  'шт', 1, 8400, 'c-9016', 'Для лёгких дверей'],
+    // threshold (порог)
+    ['dh-thresh-55gold',     'threshold',    '—',     'Порог 55 GOLD (с термо)','м',  1, 3080, null,    'Анодированный E6 EV1'],
+    ['dh-thresh-pvc',        'threshold',    '—',     'Порог ПВХ',              'м',  1, 1450, null,    'Бюджетный'],
+    // response strike (ответная планка)
+    ['dh-strike-klong',      'strike',       'K-LONG','Ответная планка K-LONG', 'шт', 2, 1700, 'c-7024', '2 шт (бачковый+язычковый)'],
+    // rosette (розетка)
+    ['dh-rosette-sk',        'rosette',      'SK',    'Розетка 7016/7024',      'компл.', 1, 4080, 'c-7024', null],
+    // fixator (фиксатор)
+    ['dh-fixator-klong',     'fixator',      'K-LONG','Фиксатор тонкий K-LONG', 'шт', 1, 1275, 'c-7024', null],
+    // handle hardware kit (фурнитура для ручки)
+    ['dh-handle-kit-sk',     'handle_kit',   'SK',    'Фурнитура для ручки 7016/7024', 'компл.', 1, 10625, 'c-7024', null],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
 if (isEmpty('meshes')) {
   const ins = db.prepare(`INSERT INTO meshes (id,kind,name,color,price_per_unit,unit) VALUES (?,?,?,?,?,?)`);
   const seeds = [
