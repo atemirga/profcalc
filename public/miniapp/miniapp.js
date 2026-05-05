@@ -1811,7 +1811,7 @@
 
     if (!state.project.items?.length) startNewProject();
     let arIdx = state.activeIdx || 0;
-    let opacity = 0.78;
+    let opacity = 0.80;  // Phase AR-1: default 80% per user spec (glass extra-transparent below)
 
     clear(root);
     const screen = h('div', { class: 'ar-screen' });
@@ -1924,16 +1924,22 @@
       const baseDim = Math.min(vw, vh) * 0.6;
       const overlayW = aspectRatio >= 1 ? baseDim : baseDim * aspectRatio;
       const overlayH = aspectRatio >= 1 ? baseDim / aspectRatio : baseDim;
+      // Phase AR-1: pass colors directly to WindowSchema so frame/sash use the
+      // RAL color and glass becomes semi-transparent white (~20% opacity, the
+      // user sees through it to the real wall). Overall SVG ≈ 80% opacity.
       overlaySvg = window.WindowSchema({
         w: overlayW, h: overlayH, layout: it.layout, showDims: false,
         frameColor: colorHex,
+        sashColor: colorHex,
+        glassColor: 'rgba(255, 255, 255, 0.20)',  // semi-transparent white — see through to wall
       });
-      // Override frame fill color via post-processing (WindowSchema uses fixed colors)
+      // Tweak the inner glass stroke (drawn separately by WindowSchema) so it
+      // doesn't show as a dark outline on top of the camera feed.
       try {
-        // Recolor frame rects (the dark "5a5a5a"/"3a3a3a" that represent profile)
         overlaySvg.querySelectorAll('rect').forEach(r => {
-          const f = r.getAttribute('fill') || '';
-          if (f === '#5a5a5a' || f === '#3a3a3a') r.setAttribute('fill', colorHex);
+          if ((r.getAttribute('fill') || '').replace(/\s/g, '') === 'rgba(255,255,255,0.20)') {
+            r.setAttribute('stroke', 'rgba(255, 255, 255, 0.35)');
+          }
         });
       } catch {}
       overlaySvg.style.opacity = String(opacity);
