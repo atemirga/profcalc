@@ -325,9 +325,22 @@ export function calcWindow(input) {
     }
   }
 
-  // Glazing — Phase 12+18: per-glass-pack itemized lines; non-rectangular shapes get factor surcharge
+  // Glazing — Phase 12+18+19: per-glass-pack lines + shape factor + attribute multipliers
   const glazArt = art(glazingArticle(glaz.formula));
   const glassShapeFactor = shapeRow ? Number(shapeRow.glass_factor) || 1.0 : 1.0;
+  // Phase 19: glass attribute multipliers (tempered 1.4, triplex 1.6, tint 1.2, etc)
+  const attrIds = Array.isArray(input.glassAttributes) ? input.glassAttributes : [];
+  let attrMultiplier = 1.0;
+  let attrSurchargePerM2 = 0;
+  const attrLabels = [];
+  for (const aid of attrIds) {
+    const attr = db.prepare('SELECT * FROM glass_attributes WHERE id = ?').get(aid);
+    if (!attr) continue;
+    attrMultiplier *= Number(attr.multiplier) || 1.0;
+    attrSurchargePerM2 += Number(attr.surcharge_per_m2) || 0;
+    attrLabels.push(attr.name);
+  }
+  const totalGlassMultiplier = glassShapeFactor * attrMultiplier;
   // Walk layout sections to emit one line per distinct glass packet size
   // (a stock cutting list will optimize identical sizes anyway).
   const glassMap = {};
@@ -349,22 +362,23 @@ export function calcWindow(input) {
   });
   Object.values(glassMap).forEach(g => {
     const factorTag = glassShapeFactor > 1 ? ` · форма ×${glassShapeFactor.toFixed(1)}` : '';
-    const label = `Стеклопакет ${glaz.formula} · ${g.wMm}×${g.hMm} мм${factorTag}` + (g.qty > 1 ? ` (×${g.qty})` : '');
+    const attrTag = attrLabels.length ? ` · ${attrLabels.join(' + ')}` : '';
+    const label = `Стеклопакет ${glaz.formula} · ${g.wMm}×${g.hMm} мм${factorTag}${attrTag}` + (g.qty > 1 ? ` (×${g.qty})` : '');
     const totalArea = +(g.areaM2 * g.qty).toFixed(3);
-    const unitPrice = Math.round(glazArt[priceLevel] * glassShapeFactor);
+    const unitPrice = Math.round(glazArt[priceLevel] * totalGlassMultiplier + attrSurchargePerM2);
     allLines.push(tag({
       label, qty: totalArea.toFixed(2) + ' м²', qtyNum: totalArea, unit: 'м²',
       article: glazArt.article, unitPrice,
       price: Math.round(totalArea * unitPrice),
     }, 'glazing'));
   });
-  // ── Phase 18: extra glass area for non-rectangular extensions (arch top, etc)
+  // ── Phase 18+19: extra glass area for non-rectangular extensions
   if (isNonRect) {
     const rectGlassArea = w_m * h_m;
-    const shapeGlassArea = (shapeGeo.glassArea / 1e6); // mm² → m²
+    const shapeGlassArea = (shapeGeo.glassArea / 1e6);
     const extraArea = +(shapeGlassArea - rectGlassArea).toFixed(3);
     if (extraArea > 0.01) {
-      const unitPrice = Math.round(glazArt[priceLevel] * glassShapeFactor);
+      const unitPrice = Math.round(glazArt[priceLevel] * totalGlassMultiplier + attrSurchargePerM2);
       allLines.push(tag({
         label: `Стеклопакет доп. площадь (${shapeRow?.name || shape.kind})`,
         qty: extraArea.toFixed(2) + ' м²', qtyNum: extraArea, unit: 'м²',
@@ -789,6 +803,7 @@ export function calcProject(input) {
       turnProfile: it.turnProfile,
       frameAdapter: it.frameAdapter,
       shape: it.shape,
+      glassAttributes: it.glassAttributes,
     });
     const qty = it.qty || 1;
     perItem.push({

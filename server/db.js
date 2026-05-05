@@ -132,6 +132,22 @@ if (isEmpty('profile_systems')) {
     ['veka-softline-82', 'VEKA Softline 82', 'VEKA',  7, 82, 'ПВХ'],
     ['salamander-82',    'Salamander bluEvolution 82', 'Salamander', 6, 82, 'ПВХ'],
     ['lm-2138-55',       'LM-2138 (55 серия)','LM',    5, 55, 'ПВХ'],
+    // ── Phase 20: extended PVC profile catalog
+    ['rehau-brillant-70','Rehau Brillant 70','Rehau',   5, 70, 'ПВХ'],
+    ['rehau-geneo-86',   'Rehau Geneo 86',   'Rehau',   6, 86, 'ПВХ'],
+    ['rehau-synego-80',  'Rehau Synego 80',  'Rehau',   7, 80, 'ПВХ'],
+    ['veka-softline-70', 'VEKA Softline 70', 'VEKA',    5, 70, 'ПВХ'],
+    ['veka-topline',     'VEKA Topline 75',  'VEKA',    6, 75, 'ПВХ'],
+    ['veka-alphaline-90','VEKA Alphaline 90','VEKA',    8, 90, 'ПВХ'],
+    ['kbe-76-master',    'KBE 76 Master',    'KBE',     6, 76, 'ПВХ'],
+    ['kbe-88-engelberg', 'KBE 88 Engelberg', 'KBE',     7, 88, 'ПВХ'],
+    ['salamander-streamline-76','Salamander StreamLine 76','Salamander', 5, 76, 'ПВХ'],
+    ['salamander-blu-92','Salamander bluEvolution 92','Salamander',7, 92, 'ПВХ'],
+    ['schueco-living-82','Schueco LivIng 82','Schueco',  6, 82, 'ПВХ'],
+    ['aluplast-ideal-7000','Aluplast IDEAL 7000','Aluplast',6, 70, 'ПВХ'],
+    ['aluplast-ideal-8000','Aluplast IDEAL 8000','Aluplast',7, 85, 'ПВХ'],
+    ['trocal-innonova-76','Trocal InnoNova 76','Trocal', 6, 76, 'ПВХ'],
+    ['decor-line-70',    'DecorLine 70',     'Decor (KZ)',5, 70, 'ПВХ'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -289,6 +305,18 @@ CREATE TABLE IF NOT EXISTS door_types (
   reinforcement_factor REAL NOT NULL DEFAULT 1.0,
   required_components TEXT,
   default_opening TEXT NOT NULL DEFAULT 'ДВЕРЬ-ПП'
+);
+
+-- ── PHASE 19: Glass attributes — toughened/laminated/tinted/coated extras
+CREATE TABLE IF NOT EXISTS glass_attributes (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL,                    -- tempered | triplex | tint | low_e | sun_control | self_clean | acoustic | shock_proof | georgian_bar
+  name TEXT NOT NULL,
+  description TEXT,
+  multiplier REAL NOT NULL DEFAULT 1.0,   -- price multiplier on top of base m² price (tempered 1.4×, triplex 1.6×, tint 1.2×)
+  surcharge_per_m2 INTEGER NOT NULL DEFAULT 0,  -- absolute add-on per m²
+  per_pane INTEGER NOT NULL DEFAULT 0,    -- 1 = applies per pane (not per area)
+  notes TEXT
 );
 
 -- ── PHASE 18: Shape catalog — non-rectangular outer contours
@@ -624,6 +652,29 @@ if (isEmpty('profile_parts')) {
     ['pp-reh-del-sash', 'rehau-delight-70', 'sash',   'REH-DEL-SASH',  76, 1.5, 'Rehau Delight створка 76', 6900],
     ['pp-reh-del-mull', 'rehau-delight-70', 'mullion','REH-DEL-MULL',  82, 1.5, 'Rehau Delight импост 82',  6300],
     ['pp-reh-del-bead', 'rehau-delight-70', 'bead',   'REH-DEL-BEAD',  20, null, 'Rehau штапик 20 мм',      650],
+    // ── Phase 20: stub profile_parts for new systems (only main 4 components each)
+    ...[
+      ['rehau-brillant-70',     6100, 7300, 6700,  690],
+      ['rehau-geneo-86',        7800, 9200, 8400,  720],   // премиум Geneo (с фиброволокном)
+      ['rehau-synego-80',       7100, 8400, 7700,  710],
+      ['veka-softline-70',      5900, 7100, 6500,  680],
+      ['veka-topline',          6700, 8000, 7300,  700],
+      ['veka-alphaline-90',     8400, 9900, 9000,  730],   // премиум 8 камер 90 мм
+      ['kbe-76-master',         6000, 7200, 6600,  690],
+      ['kbe-88-engelberg',      7800, 9100, 8400,  720],   // премиум KBE
+      ['salamander-streamline-76', 6300, 7500, 6900,  700],
+      ['salamander-blu-92',     8900, 10500, 9600, 760],   // топовый Salamander 92 мм
+      ['schueco-living-82',     7400, 8800, 8000,  710],
+      ['aluplast-ideal-7000',   5400, 6500, 5900,  650],
+      ['aluplast-ideal-8000',   6900, 8200, 7500,  700],
+      ['trocal-innonova-76',    6200, 7400, 6800,  690],
+      ['decor-line-70',         4900, 5900, 5400,  620],   // дешёвая локальная
+    ].flatMap(([sid, fp, sp, mp, bp]) => [
+      [`pp-${sid}-frame`, sid, 'frame',   `${sid.toUpperCase()}-FRAME`, 70, 1.5, sid + ' рама',     fp],
+      [`pp-${sid}-sash`,  sid, 'sash',    `${sid.toUpperCase()}-SASH`,  76, 1.5, sid + ' створка',   sp],
+      [`pp-${sid}-mull`,  sid, 'mullion', `${sid.toUpperCase()}-MULL`,  82, 1.5, sid + ' импост',    mp],
+      [`pp-${sid}-bead`,  sid, 'bead',    `${sid.toUpperCase()}-BEAD`,  20, null, sid + ' штапик',   bp],
+    ]),
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -729,6 +780,26 @@ try {
   db.prepare(`DELETE FROM handles WHERE id IN ('hnd-antipanic','hnd-apecs-knob')`).run();
   db.prepare(`DELETE FROM door_types WHERE id IN ('dt-firedoor','dt-antipanic')`).run();
 } catch {}
+
+// ── Phase 19 seeds: glass attributes ─────────────────────────────────
+if (isEmpty('glass_attributes')) {
+  const ins = db.prepare(`INSERT INTO glass_attributes (id,code,name,description,multiplier,surcharge_per_m2,per_pane,notes) VALUES (?,?,?,?,?,?,?,?)`);
+  const seeds = [
+    ['ga-tempered',     'tempered',     'Закалённое',                   'Безопасное стекло — рассыпается на мелкие осколки. Обязательно для дверей и больших окон.', 1.40, 0, 0, 'EN 12150'],
+    ['ga-triplex',      'triplex',      'Триплекс (ламинированное)',     'Защитный слой PVB между стёклами. Не разлетается при ударе.',                                  1.60, 0, 0, 'EN 14449'],
+    ['ga-low-e',        'low_e',        'Низкоэмиссионное (i-glass)',    'Прозрачное теплоотражающее покрытие. Снижает потери тепла зимой.',                              1.15, 0, 0, 'EN 1096'],
+    ['ga-sun-control',  'sun_control',  'Мультифункциональное (Sun)',    'Контроль солнечной радиации — холоднее летом, теплее зимой.',                                    1.30, 0, 0, 'g ≤ 0.45'],
+    ['ga-tint-bronze',  'tint',         'Тонировка бронза',              'Декоративная бронзовая тонировка по массе.',                                                     1.20, 0, 0, null],
+    ['ga-tint-graphite','tint',         'Тонировка графит',              'Серо-графитовая тонировка.',                                                                     1.20, 0, 0, null],
+    ['ga-mirror',       'tint',         'Зеркальное',                    'Одностороннее зеркало (visible Light Reflection).',                                              1.45, 0, 0, null],
+    ['ga-self-clean',   'self_clean',   'Самоочищающееся',               'Pilkington Activ — фотокаталитическое покрытие, разлагает грязь.',                              1.50, 0, 0, null],
+    ['ga-acoustic',     'acoustic',     'Шумозащитное',                   'Усиленный пакет 6-12-4-12-6 + PVB. Rw ≥ 41 dB.',                                                  1.35, 0, 0, 'Rw=41-44'],
+    ['ga-shock-proof',  'shock_proof',  'Противоударное (P2A/P4A)',      'Многослойное защитное стекло с усиленным PVB.',                                                 1.80, 0, 0, 'EN 356'],
+    ['ga-georgian-bar', 'georgian_bar', 'Шпрос внутри стеклопакета',     'Декоративные перекладины ВНУТРИ пакета (не снаружи).',                                          1.0,  3500, 0, 'на доб. м перекладин'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
 
 // ── Phase 18 seeds: shape catalog ─────────────────────────────────────
 if (isEmpty('shape_types')) {

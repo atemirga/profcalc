@@ -224,6 +224,7 @@ makeCrud('seals',          'id', ['id','code','position','name','price_per_m']);
 makeCrud('brackets',       'id', ['id','category','code','name','unit','price_per_unit']);
 makeCrud('door_types',     'id', ['id','code','name','description','default_width','default_height','reinforcement_factor','required_components','default_opening']);
 makeCrud('shape_types',    'id', ['id','code','name','description','glass_factor','bend_fee','has_bent_profile','params_schema']);
+makeCrud('glass_attributes','id', ['id','code','name','description','multiplier','surcharge_per_m2','per_pane','notes']);
 
 // ── calc scope categories (profile / hardware / glazing / …) ───────────
 api.get('/calc/categories', (_req, res) => {
