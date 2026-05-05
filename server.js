@@ -21,10 +21,26 @@ app.use((req, _res, next) => {
 
 app.use('/api', api);
 
+// No-cache headers for HTML/JS/CSS — Telegram WebApp aggressively caches static
+// assets, so we force revalidation on every request to ensure users see the
+// latest miniapp code without needing to reinstall the bot.
+function noCacheStatic(dir) {
+  return express.static(dir, {
+    etag: false, lastModified: false,
+    setHeaders: (res, p) => {
+      if (/\.(html|js|css|svg)$/.test(p)) {
+        res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+      }
+    },
+  });
+}
+
 // Static SPAs
-app.use('/admin',   express.static(path.join(__dirname, 'public/admin')));
-app.use('/miniapp', express.static(path.join(__dirname, 'public/miniapp')));
-app.use('/shared',  express.static(path.join(__dirname, 'public/shared')));
+app.use('/admin',   noCacheStatic(path.join(__dirname, 'public/admin')));
+app.use('/miniapp', noCacheStatic(path.join(__dirname, 'public/miniapp')));
+app.use('/shared',  noCacheStatic(path.join(__dirname, 'public/shared')));
 
 // Root → friendly index linking both surfaces
 app.get('/', (_req, res) => {
