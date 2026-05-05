@@ -685,10 +685,10 @@
       const doorTpls = (window.WINDOW_TEMPLATES || []).filter(t => t.category === 'door');
       const doorTypes = state.cache.doorTypes || [];
       sheet({
-        title: 'Выберите тип двери',
+        title: 'Выберите тип двери (стеклянная ПВХ)',
         body: [
           h('div', { style: 'font-size:12.5px;color:var(--muted);margin-bottom:10px;line-height:1.5' },
-            'Выберите дверь — фурнитура и комплектующие подберутся автоматически по типу (входная / балконная / штульповая / противопожарная / антипаника / французская / портал).'),
+            'Все двери — остеклённые из ПВХ-профиля (как у окон). Фурнитура и комплектующие подберутся автоматически: входная / балконная / террасная / штульповая / двустворчатая / французская / витражная / маятниковая / раздвижной портал.'),
           h('div', { class: 'templates-grid' },
             doorTpls.map(t => {
               const dt = doorTypes.find(d => d.id === t.doorType);
@@ -712,13 +712,14 @@
       next.doorTypeId = tpl.doorType || null;
       // Auto-clear doorKit so calc.js fills it from door_type.required_components
       next.doorKit = {};
-      // Door-rated handle by default
+      // Door-rated handle by default — pick by door_type code
       const dt = (state.cache.doorTypes || []).find(d => d.id === tpl.doorType);
-      if (dt && dt.code === 'antipanic') {
-        next.handleId = 'hnd-antipanic';
-      } else {
-        next.handleId = 'hnd-dorma-klong';
-      }
+      const code = dt?.code;
+      if (code === 'storefront')      next.handleId = 'hnd-dorma-pushpull';   // витражная — push-pull
+      else if (code === 'balcony')    next.handleId = 'hnd-hoppe-balcony';    // балконная односторонняя
+      else if (code === 'swing')      next.handleId = 'hnd-hoppe-tokyo';      // маятниковая — скоба
+      else if (code === 'sliding_portal') next.handleId = 'hnd-roto-set';     // раздвижной — гарнитур
+      else                            next.handleId = 'hnd-dorma-klong';     // вход/террасная/штульп/французская/double — нажимная K-LONG
       next.handleColorId = 'c-7024';
       // Door-rated hardware kit
       next.hardwareKitId = tpl.doorType === 'dt-portal' ? 'hw-sliding-portal' : 'hw-roto-door';
@@ -969,8 +970,9 @@
       // ── Phase 1: Hardware kit
       body.appendChild(h('div', { class: 'section-label' }, 'Фурнитура'));
       const hwCard = h('div', { class: 'card list', style: 'margin-bottom:14px' });
-      const isDoor = (item.layout.rows || []).some(r => (r.sections || []).some(s => (s.opening || '').startsWith('ДВЕРЬ')));
+      // Treat sliding sections as 'door' for UI purposes (they need door-rated hardware)
       const hasSliding = (item.layout.rows || []).some(r => (r.sections || []).some(s => (s.opening || '').startsWith('РАЗД')));
+      const isDoor = (item.layout.rows || []).some(r => (r.sections || []).some(s => (s.opening || '').startsWith('ДВЕРЬ'))) || hasSliding;
       const hwFiltered = state.cache.hwKits.filter(k => isDoor ? true : (hasSliding ? true : k.kind === 'window'));
       hwFiltered.forEach(k => {
         const sel = k.id === item.hardwareKitId;
@@ -1057,28 +1059,39 @@
           lock: 'lockId', lock_tongue: 'lockTongueId', cylinder: 'cylinderId',
           hinge: 'hingeId', closer: 'closerId', threshold: 'thresholdId',
           strike: 'strikeId', rosette: 'rosetteId', fixator: 'fixatorId', handle_kit: 'handleKitId',
+          bottom_bolt: 'bottomBoltId', top_bolt: 'topBoltId',
+          roller: 'rollerId', rail: 'railId',
         };
         const catLabel = {
           lock: 'Замок основной', lock_tongue: 'Замок язычковый', cylinder: 'Личинка',
           hinge: 'Петли (3 шт)', closer: 'Доводчик', threshold: 'Порог (по ширине двери)',
           strike: 'Ответная планка', rosette: 'Розетка', fixator: 'Фиксатор', handle_kit: 'Фурнитура для ручки',
+          bottom_bolt: 'Шпингалет нижний (пасс. створка)',
+          top_bolt:    'Шпингалет верхний (пасс. створка)',
+          roller:      'Каретки раздвижные',
+          rail:        'Рельс раздвижной',
         };
-        // Preset definitions
+        // Preset definitions (glazed PVC doors only)
         const presets = {
-          minimal: {
-            label: 'Минимум', desc: '5 позиций — замок, личинка, петли, ручка, порог',
-            cats: ['lock', 'cylinder', 'hinge', 'handle_kit', 'threshold'],
-            values: { lock: 'dh-lock-bachok-dorma', cylinder: 'dh-cyl-kale', hinge: 'dh-hinge-hn3303-sk', handle_kit: 'dh-handle-kit-sk', threshold: 'dh-thresh-pvc' },
+          balcony: {
+            label: 'Балконная', desc: '4 поз. — замок, петли, ручка, порог',
+            cats: ['lock', 'hinge', 'handle_kit', 'threshold'],
+            values: { lock: 'dh-lock-bachok-dorma', hinge: 'dh-hinge-hn3303-sk', handle_kit: 'dh-handle-kit-sk', threshold: 'dh-thresh-pvc' },
           },
           basic: {
-            label: 'Базовый', desc: '7 позиций — стандарт DORMA + K-LONG',
+            label: 'Входная', desc: '7 поз. — стандарт DORMA + K-LONG + Порог 55 GOLD',
             cats: ['lock', 'cylinder', 'hinge', 'closer', 'handle_kit', 'strike', 'threshold'],
             values: { lock: 'dh-lock-bachok-dorma', cylinder: 'dh-cyl-dorma', hinge: 'dh-hinge-hn3303-sk', closer: 'dh-closer-ts73-dorma', handle_kit: 'dh-handle-kit-sk', strike: 'dh-strike-klong', threshold: 'dh-thresh-55gold' },
           },
           full: {
-            label: 'Расширенный', desc: '10 позиций — всё из накладной (DORMA TS77 + 2 замка + фиксатор + розетка)',
-            cats: ['lock', 'lock_tongue', 'cylinder', 'hinge', 'closer', 'threshold', 'strike', 'rosette', 'fixator', 'handle_kit'],
-            values: { lock: 'dh-lock-bachok-dorma', lock_tongue: 'dh-lock-tongue-dorma', cylinder: 'dh-cyl-dorma', hinge: 'dh-hinge-hn3303-sk', closer: 'dh-closer-ts77-dorma', threshold: 'dh-thresh-55gold', strike: 'dh-strike-klong', rosette: 'dh-rosette-sk', fixator: 'dh-fixator-klong', handle_kit: 'dh-handle-kit-sk' },
+            label: 'Двойная штульп.', desc: '11 поз. — 2 замка + шпингалеты верх+низ + всё прочее',
+            cats: ['lock', 'lock_tongue', 'cylinder', 'hinge', 'closer', 'threshold', 'strike', 'rosette', 'fixator', 'handle_kit', 'bottom_bolt', 'top_bolt'],
+            values: { lock: 'dh-lock-bachok-dorma', lock_tongue: 'dh-lock-tongue-dorma', cylinder: 'dh-cyl-dorma', hinge: 'dh-hinge-hn3303-sk', closer: 'dh-closer-ts77-dorma', threshold: 'dh-thresh-55gold', strike: 'dh-strike-klong', rosette: 'dh-rosette-sk', fixator: 'dh-fixator-klong', handle_kit: 'dh-handle-kit-sk', bottom_bolt: 'dh-bottom-bolt', top_bolt: 'dh-top-bolt' },
+          },
+          sliding: {
+            label: 'Раздвижная', desc: '4 поз. — каретки, рельс, петли, порог',
+            cats: ['roller', 'rail', 'hinge', 'threshold', 'handle_kit'],
+            values: { roller: 'dh-sl-roller', rail: 'dh-sl-rail', hinge: 'dh-hinge-hn3303-sk', threshold: 'dh-thresh-55gold', handle_kit: 'dh-handle-kit-sk' },
           },
         };
         // Detect current preset
@@ -1422,7 +1435,14 @@
                 if (isDoor && t.doorType) {
                   item.doorTypeId = t.doorType;
                   item.doorKit = {};
-                  item.handleId = (t.doorType === 'dt-antipanic') ? 'hnd-antipanic' : 'hnd-dorma-klong';
+                  // Pick handle by door type code (glazed-door variants)
+                  const dt = (state.cache.doorTypes || []).find(d => d.id === t.doorType);
+                  const code = dt?.code;
+                  if (code === 'storefront')          item.handleId = 'hnd-dorma-pushpull';
+                  else if (code === 'balcony')        item.handleId = 'hnd-hoppe-balcony';
+                  else if (code === 'swing')          item.handleId = 'hnd-hoppe-tokyo';
+                  else if (code === 'sliding_portal') item.handleId = 'hnd-roto-set';
+                  else                                item.handleId = 'hnd-dorma-klong';
                   item.handleColorId = 'c-7024';
                   item.hardwareKitId = t.doorType === 'dt-portal' ? 'hw-sliding-portal' : 'hw-roto-door';
                 }

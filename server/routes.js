@@ -779,15 +779,15 @@ api.get('/opening-types', (_, res) => {
     { code: 'ПОЛ',       label: 'Поворотно-откидное лев.', short: '◣▽', group: 'window' },
     { code: 'ПОП',       label: 'Поворотно-откидное прав.',short: '▽◢', group: 'window' },
     { code: 'ФР',        label: 'Фрамужное',               short: '△',  group: 'window' },
-    { code: 'ДВЕРЬ-ПЛ',     label: 'Дверь левая',           short: '⇐',  group: 'door' },
-    { code: 'ДВЕРЬ-ПП',     label: 'Дверь правая',          short: '⇒',  group: 'door' },
-    { code: 'ДВЕРЬ-FIX',    label: 'Дверь глухая',          short: '⊟',  group: 'door' },
-    // ── Phase 7: extended door openings
-    { code: 'ДВЕРЬ-ШТЛ',    label: 'Штульповая ведомая',    short: '⇐⊏', group: 'door' },
-    { code: 'ДВЕРЬ-ШТП',    label: 'Штульповая ведущая',    short: '⊐⇒', group: 'door' },
-    { code: 'ДВЕРЬ-АНТП',   label: 'Антипаника',            short: '⇏',  group: 'door' },
-    { code: 'РАЗД-Л',       label: 'Раздвижная влево',      short: '⇇',  group: 'door' },
-    { code: 'РАЗД-П',       label: 'Раздвижная вправо',     short: '⇉',  group: 'door' },
+    { code: 'ДВЕРЬ-ПЛ',     label: 'Дверь левая (распашная)',     short: '⇐',  group: 'door' },
+    { code: 'ДВЕРЬ-ПП',     label: 'Дверь правая (распашная)',    short: '⇒',  group: 'door' },
+    { code: 'ДВЕРЬ-FIX',    label: 'Дверь глухая (фрамуга)',      short: '⊟',  group: 'door' },
+    // ── Phase 7: extended door openings (glazed PVC doors)
+    { code: 'ДВЕРЬ-ШТЛ',    label: 'Штульповая ведомая (пасс.)',  short: '⇐⊏', group: 'door' },
+    { code: 'ДВЕРЬ-ШТП',    label: 'Штульповая ведущая (актив.)', short: '⊐⇒', group: 'door' },
+    { code: 'ДВЕРЬ-МАЯТ',   label: 'Маятниковая (двусторонняя)',  short: '⇔',  group: 'door' },
+    { code: 'РАЗД-Л',       label: 'Раздвижная влево',            short: '⇇',  group: 'door' },
+    { code: 'РАЗД-П',       label: 'Раздвижная вправо',           short: '⇉',  group: 'door' },
   ]);
 });
 

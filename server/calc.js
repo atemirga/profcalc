@@ -185,7 +185,8 @@ export function calcWindow(input) {
   let doorCount = 0;
   let slidingCount = 0;
   let totalSections = 0;
-  let doorWidthTotal = 0;  // sum of door section widths (m) — for threshold length
+  let doorWidthTotal = 0;     // sum of door section widths (m) — for threshold length
+  let slidingWidthTotal = 0;  // sum of sliding section widths (m) — for rail length
 
   layout.rows.forEach((row, ri) => {
     const rowH = rowHs[ri];
@@ -205,7 +206,7 @@ export function calcWindow(input) {
         glazingArea += Math.max(0, (sw - 2 * sashFrameInset)) * Math.max(0, (rowH - 2 * sashFrameInset));
         openCount++;
         if (isDoor(code)) { doorCount++; doorWidthTotal += sw; }
-        if (isSliding(code)) slidingCount++;
+        if (isSliding(code)) { slidingCount++; slidingWidthTotal += sw; }
       }
     });
   });
@@ -367,8 +368,14 @@ export function calcWindow(input) {
   // ── Phase 7: door type lookup (used both for kit defaults and reinforcement factor below)
   const doorType = doorTypeId ? db.prepare('SELECT * FROM door_types WHERE id = ?').get(doorTypeId) : null;
 
-  // ── Phase 2/7: Door hardware kit (lock, hinge, closer, threshold, strike, +peephole/antipanic/bottom_bolt)
-  if (doorCount > 0) {
+  // ── Phase 2/7: Door hardware kit
+  // Triggers for: distinct door sections (doorCount), OR sliding-portal door type
+  // (slidingCount > 0 with doorType.code === 'sliding_portal')
+  const isPortalDoor = doorType && doorType.code === 'sliding_portal' && slidingCount > 0;
+  // For sliding portals, treat the whole sliding span as "doors" for hardware purposes
+  const effectiveDoorCount = doorCount + (isPortalDoor ? slidingCount : 0);
+  const effectiveDoorWidth = doorWidthTotal + (isPortalDoor ? slidingWidthTotal : 0);
+  if (effectiveDoorCount > 0) {
     const dkOverride = doorKit || {};
     // Phase 7: door-type-aware defaults — only required_components are pre-filled
     let defaults;
@@ -379,20 +386,23 @@ export function calcWindow(input) {
       // Choose the right component for this door type (firedoor/antipanic get specialized parts)
       const isFire = doorType.code === 'firedoor';
       const isAnti = doorType.code === 'antipanic';
+      const isPortal = doorType.code === 'sliding_portal';
+      const isStorefront = doorType.code === 'storefront';
       defaults = {
         lockId:       reqSet.has('lock')        ? 'dh-lock-bachok-dorma' : null,
         lockTongueId: reqSet.has('lock_tongue') ? 'dh-lock-tongue-dorma' : null,
         cylinderId:   reqSet.has('cylinder')    ? 'dh-cyl-dorma'         : null,
-        hingeId:      reqSet.has('hinge')       ? (isFire ? 'dh-hinge-fire' : 'dh-hinge-hn3303-sk') : null,
-        closerId:     reqSet.has('closer')      ? (isFire ? 'dh-closer-hidden' : 'dh-closer-ts77-dorma') : null,
-        thresholdId:  reqSet.has('threshold')   ? (isFire ? 'dh-thresh-firedoor' : 'dh-thresh-55gold') : null,
+        hingeId:      reqSet.has('hinge')       ? 'dh-hinge-hn3303-sk'   : null,
+        closerId:     reqSet.has('closer')      ? 'dh-closer-ts77-dorma' : null,
+        thresholdId:  reqSet.has('threshold')   ? 'dh-thresh-55gold'     : null,
         strikeId:     reqSet.has('strike')      ? 'dh-strike-klong'      : null,
         rosetteId:    reqSet.has('rosette')     ? 'dh-rosette-sk'        : null,
         fixatorId:    reqSet.has('fixator')     ? 'dh-fixator-klong'     : null,
         handleKitId:  reqSet.has('handle_kit')  ? 'dh-handle-kit-sk'     : null,
-        peepholeId:   reqSet.has('peephole')    ? 'dh-peephole-std'      : null,
-        antipanicId:  isAnti                    ? 'dh-antipanic-bar'     : null,
         bottomBoltId: reqSet.has('bottom_bolt') ? 'dh-bottom-bolt'       : null,
+        topBoltId:    reqSet.has('top_bolt')    ? 'dh-top-bolt'          : null,
+        rollerId:     reqSet.has('roller')      ? 'dh-sl-roller'         : null,
+        railId:       reqSet.has('rail')        ? 'dh-sl-rail'           : null,
       };
     } else {
       // Legacy default — full DORMA + K-LONG kit (matches the photo invoice)
@@ -407,9 +417,10 @@ export function calcWindow(input) {
         rosetteId:    'dh-rosette-sk',
         fixatorId:    'dh-fixator-klong',
         handleKitId:  'dh-handle-kit-sk',
-        peepholeId:   null,
-        antipanicId:  null,
         bottomBoltId: null,
+        topBoltId:    null,
+        rollerId:     null,
+        railId:       null,
       };
     }
     const selected = { ...defaults, ...dkOverride };
@@ -417,17 +428,17 @@ export function calcWindow(input) {
     const dhRow = (id) => id ? db.prepare('SELECT * FROM door_hardware WHERE id = ?').get(id) : null;
     const dhLine = (row, qtyMultiplier = 1) => {
       if (!row) return;
-      // qty: per-door * doorCount * qtyMultiplier (threshold uses multiplier=doorWidth)
+      // qty: per-door * effectiveDoorCount * qtyMultiplier (threshold/rail use multiplier=width in m)
       const qty = row.unit === 'м'
         ? +(qtyMultiplier).toFixed(2)
-        : +(row.qty_per_door * doorCount * qtyMultiplier).toFixed(2);
+        : +(row.qty_per_door * effectiveDoorCount * qtyMultiplier).toFixed(2);
       const unitPrice = Math.round(row.price * priceMultiplier(priceLevel));
       const colorTag = row.color_default ? (() => {
         const c = db.prepare('SELECT * FROM colors WHERE id = ?').get(row.color_default);
         return c ? ' · ' + c.ral : '';
       })() : '';
       allLines.push(tag({
-        label: `${row.vendor} · ${row.name}${colorTag}` + (doorCount > 1 ? ` (×${doorCount} двери)` : ''),
+        label: `${row.vendor} · ${row.name}${colorTag}` + (effectiveDoorCount > 1 ? ` (×${effectiveDoorCount} ${isPortalDoor ? 'створки' : 'двери'})` : ''),
         qty: qty + ' ' + row.unit, qtyNum: qty, unit: row.unit,
         article: row.id, unitPrice, price: Math.round(qty * unitPrice),
       }, 'hardware'));
@@ -441,11 +452,13 @@ export function calcWindow(input) {
     dhLine(dhRow(selected.rosetteId));
     dhLine(dhRow(selected.fixatorId));
     dhLine(dhRow(selected.handleKitId));
-    dhLine(dhRow(selected.peepholeId));
-    dhLine(dhRow(selected.antipanicId));
     dhLine(dhRow(selected.bottomBoltId));
+    dhLine(dhRow(selected.topBoltId));
+    dhLine(dhRow(selected.rollerId));
+    // Sliding rail — length = total door span × 2 (top+bottom rails)
+    if (effectiveDoorWidth > 0 && selected.railId) dhLine(dhRow(selected.railId), effectiveDoorWidth * 2);
     // Threshold — length = sum of door widths in meters
-    if (doorWidthTotal > 0) dhLine(dhRow(selected.thresholdId), doorWidthTotal);
+    if (effectiveDoorWidth > 0) dhLine(dhRow(selected.thresholdId), effectiveDoorWidth);
   }
 
   // Reinforcement (steel inside profiles) — Phase 7: scaled by door type factor

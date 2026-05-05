@@ -772,7 +772,7 @@
     ]},
     { id: 'door_hardware',  title: 'Дверной комплект',      fields: [
       { k: 'id', l: 'ID' },
-      { k: 'category', l: 'Категория', opts: ['lock','lock_tongue','cylinder','hinge','closer','threshold','strike','rosette','fixator','handle_kit'] },
+      { k: 'category', l: 'Категория', opts: ['lock','lock_tongue','cylinder','hinge','closer','threshold','strike','rosette','fixator','handle_kit','bottom_bolt','top_bolt','roller','rail'] },
       { k: 'vendor', l: 'Бренд' }, { k: 'name', l: 'Название' },
       { k: 'unit', l: 'Ед.' }, { k: 'qty_per_door', l: 'Кол-во/дверь', type: 'number' },
       { k: 'price', l: 'Цена', type: 'number' }, { k: 'color_default', l: 'Цвет (id)' }, { k: 'notes', l: 'Прим.' },
@@ -797,7 +797,7 @@
     ]},
     { id: 'door_types',     title: 'Типы дверей',           fields: [
       { k: 'id', l: 'ID' },
-      { k: 'code', l: 'Код', opts: ['entrance','balcony','shtulp','french','firedoor','antipanic','sliding_portal','double'] },
+      { k: 'code', l: 'Код', opts: ['entrance','balcony','terrace','french','shtulp','storefront','swing','sliding_portal','double'] },
       { k: 'name', l: 'Название' }, { k: 'description', l: 'Описание' },
       { k: 'default_width', l: 'Ширина по умолч., мм', type: 'number' },
       { k: 'default_height', l: 'Высота по умолч., мм', type: 'number' },
