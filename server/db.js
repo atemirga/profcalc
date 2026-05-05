@@ -131,6 +131,7 @@ if (isEmpty('profile_systems')) {
     ['kbe-70-expert',    'KBE 70 Expert',    'KBE',   5, 70, 'ПВХ'],
     ['veka-softline-82', 'VEKA Softline 82', 'VEKA',  7, 82, 'ПВХ'],
     ['salamander-82',    'Salamander bluEvolution 82', 'Salamander', 6, 82, 'ПВХ'],
+    ['lm-2138-55',       'LM-2138 (55 серия)','LM',    5, 55, 'ПВХ'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -235,6 +236,33 @@ CREATE TABLE IF NOT EXISTS meshes (
   color TEXT,
   price_per_unit INTEGER NOT NULL,       -- цена за шт
   unit TEXT NOT NULL DEFAULT 'шт'
+);
+
+-- ── PHASE 3: profile parts catalog (frame/sash/mullion/bead widths) + seals + brackets
+CREATE TABLE IF NOT EXISTS profile_parts (
+  id TEXT PRIMARY KEY,
+  system_id TEXT NOT NULL,
+  kind TEXT NOT NULL,                   -- frame | sash | mullion | bead | shtulp | turn | adapter | door_sash
+  code TEXT NOT NULL,                   -- '1101-58LHT', '1064', '1151-58'
+  width_mm INTEGER,
+  thickness_mm REAL,
+  name TEXT NOT NULL,
+  price_per_m INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS seals (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL,                   -- 'CON 01', 'CON 02', 'CON 05', 'CON 07-4', 'CON 11-4'
+  position TEXT NOT NULL,               -- internal | external | central | bead | sash
+  name TEXT NOT NULL,
+  price_per_m INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS brackets (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL,               -- 'corner' | 'mull_connector' | 'sukhar' | 'frame_anchor'
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'шт',
+  price_per_unit INTEGER NOT NULL
 );
 
 -- ── PHASE 2: door hardware components (lock, hinge, closer, threshold, strike, cylinder)
@@ -524,6 +552,65 @@ if (isEmpty('meshes')) {
     ['mesh-sliding',     'sliding',   'Раздвижная',            'белый',     8400, 'шт'],
     ['mesh-pleated',     'pleated',   'Плиссе',                'белый',    18500, 'шт'],
     ['mesh-roll',        'roll',      'Рулонная',              'белый',    16800, 'шт'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+// ── Phase 3 seeds: profile parts (Logikal-style codes), seals, brackets ─
+if (isEmpty('profile_parts')) {
+  const ins = db.prepare(`INSERT INTO profile_parts (id,system_id,kind,code,width_mm,thickness_mm,name,price_per_m) VALUES (?,?,?,?,?,?,?,?)`);
+  // From the photo invoice: 5 series LM-2138, 4-digit Logikal codes
+  const seeds = [
+    // LM-2138 (55) — drawn from accepted-orders sheet on photo
+    ['pp-lm-frame',     'lm-2138-55', 'frame',     '102/105',     64, 1.5, 'Рама 64/55',           5627],
+    ['pp-lm-sash',      'lm-2138-55', 'sash',      '102/117',     64, 1.5, 'Створка 64/55',        5627],
+    ['pp-lm-mull',      'lm-2138-55', 'mullion',   '112/113',     86, 1.5, 'Импост 86/55',         6100],
+    ['pp-lm-doorsash',  'lm-2138-55', 'door_sash', '130-566-230', 110, 2.0,'Дверная створка Т 110/55', 8250],
+    ['pp-lm-bead',      'lm-2138-55', 'bead',      '7024-150',    20.5, null, 'Штапик 20.5 мм (24нн)', 870],
+    ['pp-lm-shtulp',    'lm-2138-55', 'shtulp',    '7024-118/119',58, null,  'Штульп 58',           5679],
+    ['pp-lm-turn',      'lm-2138-55', 'turn',      '7024-140/141',null,null, 'Разворотный',         4260],
+    ['pp-lm-adapter',   'lm-2138-55', 'adapter',   '5S-7024-140/141', null, null, 'Адаптер рамы наружн. откр.', 3550],
+    ['pp-lm-thresh',    'lm-2138-55', 'threshold', '7560-02/04',  null, null, 'Порог 55 GOLD',     3080],
+    // Rehau Delight 70 (filling out the catalog so older systems also have parts)
+    ['pp-reh-del-frame','rehau-delight-70', 'frame',  'REH-DEL-FRAME', 70, 1.5, 'Rehau Delight рама 70',    5750],
+    ['pp-reh-del-sash', 'rehau-delight-70', 'sash',   'REH-DEL-SASH',  76, 1.5, 'Rehau Delight створка 76', 6900],
+    ['pp-reh-del-mull', 'rehau-delight-70', 'mullion','REH-DEL-MULL',  82, 1.5, 'Rehau Delight импост 82',  6300],
+    ['pp-reh-del-bead', 'rehau-delight-70', 'bead',   'REH-DEL-BEAD',  20, null, 'Rehau штапик 20 мм',      650],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('seals')) {
+  const ins = db.prepare(`INSERT INTO seals (id,code,position,name,price_per_m) VALUES (?,?,?,?,?)`);
+  const seeds = [
+    ['s-con01',   'CON 01',  'internal','Уплотнитель внутренний (рама)',   195],
+    ['s-con02',   'CON 02',  'external','Уплотнитель наружный (рама)',     205],
+    ['s-con05',   'CON 05',  'central', 'Центральный уплотнитель (створка)',230],
+    ['s-con07-4', 'CON 07-4','bead',    'Уплотнитель штапика 4 мм',         95],
+    ['s-con11-4', 'CON 11-4','sash',    'Уплотнитель рама-створка 4 мм',   140],
+    ['s-ap37',    'AP-37',   'central', 'Уплотнитель AP-37 (12кг=220м)',   210],
+    ['s-5686',    '5686',    'sash',    'Уплотнитель 5686 (12.5кг=250м)',  225],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('brackets')) {
+  const ins = db.prepare(`INSERT INTO brackets (id,category,code,name,unit,price_per_unit) VALUES (?,?,?,?,?,?)`);
+  const seeds = [
+    // From the invoice
+    ['br-1000-14', 'corner',         '1000', 'Крепёжный уголок 14 мм',       'шт', 270],
+    ['br-1020-45', 'corner',         '1020', 'Крепёжный уголок 45 мм',       'шт', 270],
+    ['br-1058',    'corner',         '1058', 'Соединительный уголок (L)',    'шт', 120],
+    ['br-1140',    'mull_connector', '1140', 'Соединитель импоста (L)',      'шт', 120],
+    // Сухари (Sukhar) — strut/spacer for reinforcement, 4 sizes from invoice
+    ['br-suh-285-83',  'sukhar', '132-285-083', 'Сухарь 28.5×8.3 / L',       'шт', 270],
+    ['br-suh-285-253', 'sukhar', '132-285-253', 'Сухарь 28.5×25.3 / L',      'шт', 635],
+    ['br-suh-566-228', 'sukhar', '130-566-230', 'Сухарь 56.6×22.8 / Т6',     'шт', 825],
+    ['br-suh-566-58',  'sukhar', '130-566-058', 'Сухарь 56.6×5.8 / Т6+Z6',   'шт', 310],
+    // Frame anchor / труба армирования
+    ['br-tube-40x2',   'frame_anchor', '101-00', 'Труба арм. 40×2 ALP',      'шт', 3550],
+    ['br-glue-pur',    'consumable',  '026-10-14-23', 'Клей Пурокол 310 мл', 'шт', 4665],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();

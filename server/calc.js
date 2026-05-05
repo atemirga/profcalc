@@ -210,6 +210,57 @@ export function calcWindow(input) {
     allLines.push(tag(applySurcharge(line(`Импост ${sys.name}${tagStr}${colorTag}`, totalMullion, 'м', mullArt, priceLevel), colorSurchargePct), 'profile'));
   }
 
+  // ── Phase 3: bead (штапик) length — perimeter of all glass packets, +5% запас на раскрой
+  const beadPart = db.prepare("SELECT * FROM profile_parts WHERE system_id = ? AND kind = 'bead' LIMIT 1").get(systemId);
+  if (beadPart) {
+    // Glass perimeter approx — sum of (sw, rh) per glass-bearing section.
+    // We approximate as: full window perim + sash perim + mullion (every glass edge gets a bead)
+    const beadLen = +(framePerim + sashPerimTotal + totalMullion).toFixed(2) * 1.05;
+    const unitPrice = Math.round(beadPart.price_per_m * priceMultiplier(priceLevel));
+    allLines.push(tag(applySurcharge({
+      label: `Штапик ${beadPart.code} ${beadPart.width_mm} мм${colorTag}`,
+      qty: beadLen.toFixed(2) + ' м', qtyNum: beadLen, unit: 'м',
+      article: beadPart.id, unitPrice, price: Math.round(beadLen * unitPrice),
+    }, colorSurchargePct), 'profile'));
+  }
+  // Phase 3: shtulp — second sash on doors / shtulp window (height of door sash)
+  const shtulpPart = db.prepare("SELECT * FROM profile_parts WHERE system_id = ? AND kind = 'shtulp' LIMIT 1").get(systemId);
+  if (shtulpPart && doorCount >= 2) {
+    const shtulpLen = +(h_m * Math.floor(doorCount / 2)).toFixed(2);
+    const unitPrice = Math.round(shtulpPart.price_per_m * priceMultiplier(priceLevel));
+    allLines.push(tag(applySurcharge({
+      label: `Штульп ${shtulpPart.code}${colorTag}`,
+      qty: shtulpLen + ' м', qtyNum: shtulpLen, unit: 'м',
+      article: shtulpPart.id, unitPrice, price: Math.round(shtulpLen * unitPrice),
+    }, colorSurchargePct), 'profile'));
+  }
+  // Phase 3: turn (разворотный) — added when caller asks for it (input.turnProfile=true)
+  if (input.turnProfile) {
+    const turnPart = db.prepare("SELECT * FROM profile_parts WHERE system_id = ? AND kind = 'turn' LIMIT 1").get(systemId);
+    if (turnPart) {
+      const turnLen = +(h_m * 2).toFixed(2);  // both vertical edges
+      const unitPrice = Math.round(turnPart.price_per_m * priceMultiplier(priceLevel));
+      allLines.push(tag(applySurcharge({
+        label: `Разворотный ${turnPart.code}${colorTag}`,
+        qty: turnLen + ' м', qtyNum: turnLen, unit: 'м',
+        article: turnPart.id, unitPrice, price: Math.round(turnLen * unitPrice),
+      }, colorSurchargePct), 'profile'));
+    }
+  }
+  // Phase 3: frame adapter — for outward-opening doors
+  if (input.frameAdapter && doorCount > 0) {
+    const adPart = db.prepare("SELECT * FROM profile_parts WHERE system_id = ? AND kind = 'adapter' LIMIT 1").get(systemId);
+    if (adPart) {
+      const adLen = +(doorWidthTotal + h_m * 2 * doorCount).toFixed(2);  // door perim minus top
+      const unitPrice = Math.round(adPart.price_per_m * priceMultiplier(priceLevel));
+      allLines.push(tag(applySurcharge({
+        label: `Адаптер рамы наружн. откр. ${adPart.code}${colorTag}`,
+        qty: adLen + ' м', qtyNum: adLen, unit: 'м',
+        article: adPart.id, unitPrice, price: Math.round(adLen * unitPrice),
+      }, colorSurchargePct), 'profile'));
+    }
+  }
+
   // Glazing
   const glazArt = art(glazingArticle(glaz.formula));
   allLines.push(tag(line(`Стеклопакет ${glaz.formula}`, glazingArea, 'м²', glazArt, priceLevel), 'glazing'));
@@ -333,13 +384,64 @@ export function calcWindow(input) {
     if (doorWidthTotal > 0) dhLine(dhRow(selected.thresholdId), doorWidthTotal);
   }
 
-  // Reinforcement
+  // Reinforcement (steel inside profiles)
   const reinfLen = framePerim + totalMullion + sashPerimTotal * 0.6;
   allLines.push(tag(line('Армирование оцинк. сталь 1.5 мм', reinfLen, 'м', art('REINF-1.5'), priceLevel), 'reinforcement'));
 
-  // Sealing
-  const sealLen = framePerim * 2 + sashPerimTotal * 2;
-  allLines.push(tag(line('Уплотнитель EPDM (2 контура)', sealLen, 'м', art('SEAL-EPDM'), priceLevel), 'sealing'));
+  // ── Phase 3: typed seals — CON 01/02/05/07-4/11-4 (Logikal-style)
+  function sealLine(code, length) {
+    if (length <= 0) return;
+    const s = db.prepare('SELECT * FROM seals WHERE code = ?').get(code);
+    if (!s) return;
+    const unitPrice = Math.round(s.price_per_m * priceMultiplier(priceLevel));
+    allLines.push(tag({
+      label: `Уплотнитель ${s.code} · ${s.name.replace(/^Уплотнитель\s*/, '')}`,
+      qty: length.toFixed(2) + ' м', qtyNum: length, unit: 'м',
+      article: s.id, unitPrice, price: Math.round(length * unitPrice),
+    }, 'sealing'));
+  }
+  // CON 01 internal frame seal — periph of frame
+  sealLine('CON 01', framePerim);
+  // CON 02 external frame seal — periph of frame
+  sealLine('CON 02', framePerim);
+  // CON 05 central seal — sash perimeter
+  if (sashPerimTotal > 0) sealLine('CON 05', sashPerimTotal);
+  // CON 07-4 bead seal — same length as bead (frame+sash+mullion×1.05)
+  sealLine('CON 07-4', (framePerim + sashPerimTotal + totalMullion) * 1.05);
+  // CON 11-4 sash-to-frame seal — sash perimeter
+  if (sashPerimTotal > 0) sealLine('CON 11-4', sashPerimTotal);
+
+  // ── Phase 3: brackets (сухари + соединители + крепёжные уголки)
+  function brkLine(brkCode, qty) {
+    if (qty <= 0) return;
+    const b = db.prepare('SELECT * FROM brackets WHERE code = ?').get(brkCode);
+    if (!b) return;
+    const unitPrice = Math.round(b.price_per_unit * priceMultiplier(priceLevel));
+    allLines.push(tag({
+      label: `${b.name} (${b.code})`,
+      qty: qty + ' ' + b.unit, qtyNum: qty, unit: b.unit,
+      article: b.id, unitPrice, price: qty * unitPrice,
+    }, 'consumables'));
+  }
+  // Frame anchor brackets: ~6 per frame (top/bottom + 2 each side)
+  brkLine('1000', 6);
+  // Sash anchor brackets: ~6 per opening sash
+  if (openCount > 0) brkLine('1020', Math.max(6, openCount * 2));
+  // Соединительный уголок 1058 — corners: 4×rama + 4×sash×openCount + 4×mullion endpoints
+  const cornerCount = 4 + openCount * 4 + (totalMullion > 0 ? layout.rows.length * 2 : 0);
+  brkLine('1058', cornerCount);
+  // Соединитель импоста 1140 — endpoints of all imposts
+  let mullEndpoints = 0;
+  layout.rows.forEach((row, ri) => {
+    if (ri > 0) mullEndpoints += 2;                    // horizontal impost: 2 ends
+    if (row.sections.length > 1) mullEndpoints += (row.sections.length - 1) * 2;  // vertical imposts
+  });
+  if (mullEndpoints > 0) brkLine('1140', mullEndpoints);
+  // Сухари — proxy: 2 per sash (typical reinforcement strut count)
+  if (openCount > 0) {
+    brkLine('132-285-083', openCount * 2);
+    brkLine('130-566-058', openCount * 2);
+  }
 
   // Расходники (1.5% of everything else inside scope)
   const consumablesBase = allLines.filter(l => scopeSet.has(l.category)).reduce((s, l) => s + l.price, 0);
@@ -449,7 +551,7 @@ export function calcWindow(input) {
   const total = subtotal - discount;
 
   return {
-    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId, doorKit },
+    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId, doorKit, turnProfile: !!input.turnProfile, frameAdapter: !!input.frameAdapter },
     geometry: {
       framePerim: +framePerim.toFixed(3),
       mullionH: +mullionH.toFixed(3),
@@ -493,6 +595,8 @@ export function calcProject(input) {
       handleId: it.handleId,
       handleColorId: it.handleColorId,
       doorKit: it.doorKit,
+      turnProfile: it.turnProfile,
+      frameAdapter: it.frameAdapter,
     });
     const qty = it.qty || 1;
     perItem.push({

@@ -219,6 +219,9 @@ makeCrud('sills',          'id', ['id','vendor','name','width_mm','color','price
 makeCrud('ebbs',           'id', ['id','material','width_mm','color','price_per_m']);
 makeCrud('meshes',         'id', ['id','kind','name','color','price_per_unit','unit']);
 makeCrud('door_hardware',  'id', ['id','category','vendor','name','unit','qty_per_door','price','color_default','notes']);
+makeCrud('profile_parts',  'id', ['id','system_id','kind','code','width_mm','thickness_mm','name','price_per_m']);
+makeCrud('seals',          'id', ['id','code','position','name','price_per_m']);
+makeCrud('brackets',       'id', ['id','category','code','name','unit','price_per_unit']);
 
 // ── calc scope categories (profile / hardware / glazing / …) ───────────
 api.get('/calc/categories', (_req, res) => {

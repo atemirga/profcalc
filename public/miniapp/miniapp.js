@@ -919,6 +919,24 @@
         body.appendChild(dCard);
       }
 
+      // ── Phase 3: special profile additions
+      body.appendChild(h('div', { class: 'section-label' }, 'Спец. профили'));
+      const specCard = h('div', { class: 'card list', style: 'margin-bottom:14px' });
+      [
+        ['turnProfile',  'Разворотный профиль', 'для дверей с поворотным открыванием'],
+        ['frameAdapter', 'Адаптер рамы',         'для наружного открывания двери'],
+      ].forEach(([key, label, hint]) => {
+        const sel = !!item[key];
+        specCard.appendChild(h('div', { class: 'label-row' + (sel ? ' sel' : ''), onClick: () => { item[key] = !item[key]; paint(); } }, [
+          h('div', { class: 'ck', html: sel ? icons.check : '' }),
+          h('div', { class: 'l', style: 'flex:1' }, [
+            h('div', { style: 'font-size:14px' }, label),
+            h('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px' }, hint),
+          ]),
+        ]));
+      });
+      body.appendChild(specCard);
+
       // Extras
       body.appendChild(h('div', { class: 'section-label' }, 'Дополнительно'));
       const extrasCard = h('div', { class: 'card list', style: 'margin-bottom:14px' });
