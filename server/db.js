@@ -523,11 +523,23 @@ if (isEmpty('hardware_kits')) {
     ['hw-roto-nt',         'Roto',     'Roto NT',                 'window',  16800, 'Стандарт ПО, 5 точек'],
     ['hw-roto-nt-design',  'Roto',     'Roto NT Designo (скр.)',  'window',  24800, 'Скрытые петли'],
     ['hw-maco-mm',         'Maco',     'Maco Multi-Matic',        'window',  14500, 'Базовая Maco'],
-    ['hw-maco-mm-tip',     'Maco',     'Maco MM TipTronic',       'window',  38000, 'Электропривод'],
+    ['hw-maco-mm-tip',     'Maco',     'Maco MM TipTronic',       'window',  38000, 'Электропривод TipTronic'],
     ['hw-siegenia-titan',  'Siegenia', 'Siegenia Titan AF',       'window',  17400, 'Antifrost AF'],
+    ['hw-siegenia-aerocontrol','Siegenia','Siegenia AeroControl', 'window',  44000, 'Электропривод AeroControl'],
     ['hw-roto-door',       'Roto',     'Roto Door (3 петли)',     'door',    28000, 'Дверная Roto'],
     ['hw-maco-door',       'Maco',     'Maco Door',               'door',    22000, '3 петли'],
-    ['hw-sliding-portal',  'Roto',     'Roto Patio Inowa',        'sliding', 42000, 'Раздвижная'],
+    ['hw-sliding-portal',  'Roto',     'Roto Patio Inowa',        'sliding', 42000, 'PSK Inowa'],
+    // ── Phase 21: HS-Portal (Hebe-Schiebe / подъёмно-сдвижная) — премиум для террас
+    ['hw-hs-roto-lift',    'Roto',     'Roto Patio Lift',         'hs',      185000, 'Подъёмно-сдвижная HS до 400кг'],
+    ['hw-hs-siegenia',     'Siegenia', 'Siegenia HS Portal',      'hs',      210000, 'Подъёмно-сдвижная HS, до 6м проём'],
+    ['hw-hs-maco',         'Maco',     'Maco HS Toronto',         'hs',      168000, 'Подъёмно-сдвижная HS до 250кг'],
+    // ── Phase 22: Bi-fold (гармошка) — для веранд / зимних садов
+    ['hw-fold-roto',       'Roto',     'Roto Patio FoldLine',     'bi_fold', 95000,  'Гармошка 3-7 створок'],
+    ['hw-fold-siegenia',   'Siegenia', 'Siegenia FoldLine 1300',  'bi_fold', 110000, 'Гармошка до 1300мм/створка'],
+    // ── Phase 23: Automation — добавлены электроприводы
+    ['hw-electric-roto',   'Roto',     'Roto E-Tec Drive',        'window',  56000, 'Электропривод оконный'],
+    ['hw-automatic-door',  'DORMA',    'DORMA ED 100/250',        'door',    420000, 'Автоматическая распашная'],
+    ['hw-auto-sliding',    'DORMA',    'DORMA ES 200',            'sliding', 580000, 'Автоматическая раздвижная'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -613,6 +625,21 @@ if (isEmpty('door_hardware')) {
     // Sliding-door specific hardware
     ['dh-sl-roller',         'roller',       'Roto',  'Каретка раздвижная Patio Inowa', 'шт', 2, 18000, 'c-9016', 'Для раздвижных порталов'],
     ['dh-sl-rail',           'rail',         'Roto',  'Рельс раздвижной Patio',         'м',  1, 6800, 'c-9016', 'Верхний+нижний'],
+    // ── Phase 21: HS-Portal components
+    ['dh-hs-lift',           'hs_lift',      'Roto',  'Подъёмный механизм Patio Lift',   'компл.', 1, 145000, 'c-9016', 'Lift carriage 400кг'],
+    ['dh-hs-carriage',       'hs_carriage',  'Roto',  'Каретка HS-Portal',               'шт', 2, 24000, 'c-9016', 'Для HS-портала'],
+    ['dh-hs-rail',           'hs_rail',      'Roto',  'Рельс HS-Portal (термо)',          'м',  1, 12500, 'c-9016', '2-рельсовая система'],
+    ['dh-hs-handle',         'handle_kit',   'Hoppe', 'Hoppe HS-ручка (для HS-Portal)',  'шт', 1, 32000, 'c-7024', 'Премиум HS'],
+    // ── Phase 22: Bi-fold components
+    ['dh-fold-carriage',     'fold_carriage','Roto',  'Каретка Patio FoldLine',          'шт', 4, 28000, 'c-9016', 'По кареткам на створку'],
+    ['dh-fold-hinge',        'fold_hinge',   'Roto',  'Шарнирная петля FoldLine',        'шт', 4, 8500, 'c-9016', 'Между створками'],
+    ['dh-fold-track',        'fold_track',   'Roto',  'Направляющая FoldLine',           'м',  1, 9800, 'c-9016', 'Верхняя направляющая'],
+    // ── Phase 23: Automation
+    ['dh-auto-swing',        'automation',   'DORMA', 'Автопривод ED 100/250',           'компл.', 1, 380000, 'c-9005', 'Распашная автомат.'],
+    ['dh-auto-slide',        'automation',   'DORMA', 'Автопривод ES 200',                'компл.', 1, 480000, 'c-9016', 'Раздвижная автомат.'],
+    ['dh-electric-window',   'automation',   'Roto',  'Электропривод E-Tec Drive',       'компл.', 1, 56000, 'c-9016', 'Оконный электропривод'],
+    ['dh-radio-controller',  'automation',   'Roto',  'Контроллер радиоуправления',      'шт', 1, 18000, null, 'Беспров. управление'],
+    ['dh-rfid-reader',       'automation',   'DORMA', 'RFID считыватель',                 'шт', 1, 24000, 'c-9005', 'Контроль доступа'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();
@@ -763,6 +790,29 @@ if (isEmpty('door_types')) {
       1800, 2100, 1.1,
       JSON.stringify(['lock','cylinder','hinge','closer','threshold','strike','bottom_bolt','top_bolt','handle_kit']),
       'ДВЕРЬ-ПЛ'],
+    // ── Phase 21: HS-Portal (подъёмно-сдвижная)
+    ['dt-hs-portal', 'hs_portal',      'Подъёмно-сдвижная (HS-Portal)',
+      'Премиум-дверь для широких террас (до 12 м проём, до 400 кг створка). Roto Patio Lift / Siegenia HS / Maco HS Toronto.',
+      4000, 2400, 1.5,
+      JSON.stringify(['hs_lift','hs_carriage','hs_rail','threshold','handle_kit']),
+      'ДВЕРЬ-HS'],
+    // ── Phase 22: Bi-fold (гармошка)
+    ['dt-bifold',    'bi_fold',        'Гармошка (Bi-Fold)',
+      'Складывающаяся дверь 3-7 створок — для веранд, зимних садов, ресторанов с открытой террасой.',
+      4500, 2200, 1.3,
+      JSON.stringify(['fold_carriage','fold_hinge','fold_track','threshold','handle_kit','top_bolt']),
+      'ДВЕРЬ-FOLD'],
+    // ── Phase 23: Automatic doors
+    ['dt-auto-swing','auto_swing',     'Автоматическая распашная',
+      'DORMA ED 100/250 — автоматический привод для входа в общественные здания.',
+      1000, 2200, 1.2,
+      JSON.stringify(['lock','cylinder','hinge','threshold','strike','automation']),
+      'ДВЕРЬ-ПП'],
+    ['dt-auto-slide','auto_slide',     'Автоматическая раздвижная',
+      'DORMA ES 200 — автоматическая раздвижная для ТЦ/аэропортов.',
+      2400, 2400, 1.4,
+      JSON.stringify(['hs_carriage','hs_rail','threshold','automation']),
+      'РАЗД-АВТО'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();

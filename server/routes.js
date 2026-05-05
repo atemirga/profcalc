@@ -988,6 +988,10 @@ api.get('/opening-types', (_, res) => {
     { code: 'ДВЕРЬ-МАЯТ',   label: 'Маятниковая (двусторонняя)',  short: '⇔',  group: 'door' },
     { code: 'РАЗД-Л',       label: 'Раздвижная влево',            short: '⇇',  group: 'door' },
     { code: 'РАЗД-П',       label: 'Раздвижная вправо',           short: '⇉',  group: 'door' },
+    // ── Phase 21+22+23: advanced sliding/folding/automation
+    { code: 'ДВЕРЬ-HS',     label: 'Подъёмно-сдвижная (HS)',     short: '⇕↔', group: 'door' },
+    { code: 'ДВЕРЬ-FOLD',   label: 'Гармошка (Bi-Fold)',         short: '⇨⇨', group: 'door' },
+    { code: 'РАЗД-АВТО',    label: 'Автоматическая раздвижная',   short: '⚡⇉', group: 'door' },
   ]);
 });
 
