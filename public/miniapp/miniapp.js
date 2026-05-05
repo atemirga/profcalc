@@ -888,6 +888,8 @@
     if (!state.cache.meshes)  state.cache.meshes  = await api('/meshes').catch(() => []);
     if (!state.cache.doorHw)  state.cache.doorHw  = await api('/door_hardware').catch(() => []);
     if (!state.cache.doorTypes) state.cache.doorTypes = await api('/door_types').catch(() => []);
+    if (!state.cache.shapeTypes) state.cache.shapeTypes = await api('/shape_types').catch(() => []);
+    if (!state.cache.glassAttrs) state.cache.glassAttrs = await api('/glass_attributes').catch(() => []);
 
     const item = state.project.items[state.activeIdx];
     // backfill defaults for older items
@@ -1039,6 +1041,97 @@
         ]));
       });
       body.appendChild(glCard);
+
+      // ── Phase 19: Glass attributes (закалённое/триплекс/тонировка/etc)
+      if ((state.cache.glassAttrs || []).length) {
+        body.appendChild(h('div', { class: 'section-label' }, 'Атрибуты стеклопакета'));
+        const attrCard = h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-wrap:wrap;gap:6px' });
+        if (!Array.isArray(item.glassAttributes)) item.glassAttributes = [];
+        const sel = new Set(item.glassAttributes);
+        state.cache.glassAttrs.forEach(a => {
+          const isSel = sel.has(a.id);
+          attrCard.appendChild(h('button', {
+            onClick: () => {
+              if (isSel) item.glassAttributes = item.glassAttributes.filter(x => x !== a.id);
+              else item.glassAttributes = [...item.glassAttributes, a.id];
+              paint();
+            },
+            style: `padding:7px 11px;border-radius:8px;border:1.5px solid ${isSel ? 'var(--accent)' : 'var(--rule)'};background:${isSel ? 'var(--accent-soft, #fbeede)' : '#fff'};color:${isSel ? 'var(--accent-dark, #8a4d24)' : 'var(--text)'};font-size:11.5px;font-weight:${isSel ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left`,
+          }, [
+            h('span', { style: 'display:flex;align-items:center;gap:5px' }, [
+              h('span', { style: `width:11px;height:11px;border-radius:3px;border:1.5px solid ${isSel ? 'var(--accent-dark)' : 'var(--rule)'};background:${isSel ? 'var(--accent)' : 'transparent'};display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:8px;font-weight:700` }, isSel ? '✓' : ''),
+              a.name,
+            ]),
+            h('span', { style: 'font-size:10px;color:var(--muted);font-family:var(--mono);margin-left:18px' },
+              (a.multiplier > 1 ? `×${a.multiplier}` : '') + (a.surcharge_per_m2 > 0 ? ` +${fmtNum(a.surcharge_per_m2)}₸/м²` : '')),
+          ]));
+        });
+        body.appendChild(attrCard);
+      }
+
+      // ── Phase 18: Shape of outer contour
+      if ((state.cache.shapeTypes || []).length) {
+        body.appendChild(h('div', { class: 'section-label' }, 'Форма окна'));
+        const shapeCard = h('div', { class: 'card pad', style: 'margin-bottom:14px' });
+        const curShape = item.shape?.kind || 'rectangle';
+        const SHAPE_ICONS = { rectangle: '▭', arched: '⌒', half_circle: '◠', triangle: '▲', trapezoid: '⊿', gothic: '⌃', pentagon: '⬠', hexagon: '⬡', oval: '⬭', circle: '⬤', quarter_circle: '◔', polygon: '✚', bay: '⌐⌐⌐' };
+        shapeCard.appendChild(h('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px' },
+          state.cache.shapeTypes.map(s => {
+            const isSel = curShape === s.code;
+            return h('button', {
+              onClick: () => {
+                let params = {};
+                try { params = JSON.parse(s.params_schema || '{}'); } catch {}
+                item.shape = { kind: s.code, width: item.layout.width, height: item.layout.height, params };
+                paint();
+              },
+              style: `padding:8px 6px;border-radius:8px;border:1.5px solid ${isSel ? 'var(--accent)' : 'var(--rule)'};background:${isSel ? 'var(--accent)' : '#fff'};color:${isSel ? '#fff' : 'var(--text)'};font-size:11px;font-weight:${isSel ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px`,
+            }, [
+              h('span', { style: 'font-size:18px;line-height:1' }, SHAPE_ICONS[s.code] || '◌'),
+              h('span', { style: 'font-size:10px;text-align:center' }, s.name.replace(/\s*\(.+\)/, '')),
+            ]);
+          })));
+        // Parametric sliders for current shape
+        if (item.shape && item.shape.kind && item.shape.kind !== 'rectangle') {
+          const sh = item.shape;
+          if (!sh.params) sh.params = {};
+          const sRow = state.cache.shapeTypes.find(s => s.code === sh.kind);
+          let schema = {};
+          try { schema = JSON.parse(sRow?.params_schema || '{}'); } catch {}
+          const paramsList = h('div', { style: 'display:flex;flex-direction:column;gap:8px;margin-top:6px;padding-top:10px;border-top:1px dashed var(--rule)' });
+          Object.keys(schema).forEach(k => {
+            if (k === 'vertices' || k === 'panels') return; // handled separately
+            const val = sh.params[k] ?? schema[k];
+            const inp = h('input', { type: 'number', value: val, min: 0, max: 4000, style: 'flex:1;padding:6px 9px;border:1px solid var(--rule);border-radius:6px;font-family:var(--mono);font-size:13px;text-align:right' });
+            inp.addEventListener('change', () => { sh.params[k] = parseFloat(inp.value) || 0; paint(); });
+            paramsList.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+              h('span', { style: 'flex:1;font-size:12px;color:var(--muted);font-family:var(--mono)' }, k),
+              inp,
+              h('span', { style: 'font-size:11px;color:var(--muted)' }, 'мм'),
+            ]));
+          });
+          // bay panels selector
+          if (sh.kind === 'bay') {
+            const inp = h('input', { type: 'number', value: sh.params.panels ?? 3, min: 3, max: 7, style: 'flex:1;padding:6px 9px;border:1px solid var(--rule);border-radius:6px;font-family:var(--mono);font-size:13px;text-align:right' });
+            inp.addEventListener('change', () => { sh.params.panels = parseInt(inp.value, 10) || 3; paint(); });
+            paramsList.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+              h('span', { style: 'flex:1;font-size:12px;color:var(--muted)' }, 'Панелей'), inp,
+            ]));
+            const angleInp = h('input', { type: 'number', value: sh.params.angle ?? 135, min: 90, max: 180, style: 'flex:1;padding:6px 9px;border:1px solid var(--rule);border-radius:6px;font-family:var(--mono);font-size:13px;text-align:right' });
+            angleInp.addEventListener('change', () => { sh.params.angle = parseFloat(angleInp.value) || 135; paint(); });
+            paramsList.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+              h('span', { style: 'flex:1;font-size:12px;color:var(--muted)' }, 'Угол, °'), angleInp,
+            ]));
+          }
+          shapeCard.appendChild(paramsList);
+          // shape factor info
+          if (sRow) {
+            shapeCard.appendChild(h('div', { style: 'margin-top:8px;font-size:11px;color:var(--accent);font-family:var(--mono)' },
+              `Стекло ×${sRow.glass_factor}` + (sRow.bend_fee > 0 ? ` · Гибка ${fmtNum(sRow.bend_fee)} ₸` : '')));
+          }
+        }
+        body.appendChild(shapeCard);
+      }
 
       // ── Phase 1: Color of profile
       body.appendChild(h('div', { class: 'section-label' }, 'Цвет профиля'));
