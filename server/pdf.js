@@ -513,3 +513,148 @@ export function buildKpPdf(kp, project, calc, installer) {
 
   return doc;
 }
+
+// ── Phase 5: Заявка-накладная (Order invoice) — replicates the photo's format
+export function buildInvoicePdf(project, installer) {
+  const doc = new PDFDocument({ size: 'A4', margin: 30, info: {
+    Title: `Заявка-накладная ${project.order_number || ''}`,
+    Author: installer?.name || 'PLUR Solutions',
+  } });
+  if (fs.existsSync(FONT_REG)) doc.registerFont('Sans', FONT_REG);
+  if (fs.existsSync(FONT_BOLD)) doc.registerFont('SansB', FONT_BOLD);
+  if (fs.existsSync(FONT_MONO)) doc.registerFont('Mono', FONT_MONO);
+  doc.font('Sans');
+
+  const startX = 30;
+  const W = doc.page.width - 60;
+
+  // Header — "ЗАЯВКА-НАКЛАДНАЯ" black banner like the photo
+  doc.rect(startX, 30, 220, 28).fill('#1a1a1a');
+  doc.font('SansB').fontSize(14).fillColor('#fff').text('ЗАЯВКА-НАКЛАДНАЯ', startX + 10, 38);
+
+  // Top-right info block
+  let metaY = 32;
+  const metaX = startX + 240;
+  doc.font('Sans').fontSize(8).fillColor(MUTED);
+  doc.text('Номер заказа / Дата:', metaX, metaY);
+  doc.font('SansB').fontSize(9).fillColor(TEXT).text(
+    (project.order_number || '—') + ' / ' + new Date(project.created_at * 1000).toLocaleDateString('ru-RU'),
+    metaX + 110, metaY);
+  doc.font('Sans').fontSize(8).fillColor(MUTED).text('Тип квитанции:', metaX, metaY + 12);
+  doc.font('Sans').fontSize(9).fillColor(TEXT).text('Квитанция Принятых Заказов', metaX + 110, metaY + 12);
+  doc.font('Sans').fontSize(8).fillColor(MUTED).text('Склад:', metaX, metaY + 24);
+  doc.font('Sans').fontSize(9).fillColor(TEXT).text(project.warehouse || 'Центральный склад', metaX + 110, metaY + 24);
+
+  let y = 75;
+  // Client/object block
+  doc.font('Sans').fontSize(8).fillColor(MUTED).text('Код клиента:', startX, y);
+  doc.font('Mono').fontSize(9).fillColor(TEXT).text(project.client_code || '120-100-0001', startX + 80, y);
+  doc.font('Sans').fontSize(8).fillColor(MUTED).text('Название Клиента:', startX, y + 12);
+  doc.font('Sans').fontSize(9).fillColor(TEXT).text('Частное лицо / ' + (project.client_name || project.object_name || '—'), startX + 80, y + 12);
+  doc.font('Sans').fontSize(8).fillColor(MUTED).text('Объект:', metaX, y);
+  doc.font('SansB').fontSize(9).fillColor(TEXT).text(project.object_name || project.client_name || '—', metaX + 80, y);
+  doc.font('Sans').fontSize(8).fillColor(MUTED).text('Ответственное лицо:', metaX, y + 12);
+  doc.font('Sans').fontSize(9).fillColor(TEXT).text(project.responsible || installer?.name || 'Raimbek', metaX + 80, y + 12);
+  y = 110;
+
+  // Compute lines: aggregate everything as in BOM
+  const items = JSON.parse(project.items);
+  const aggregate = [];
+  let totalArea = 0;
+  items.forEach((it) => {
+    const c = calcWindow({
+      layout: it.layout, glazingId: it.glazingId, systemId: it.systemId,
+      manufacturerId: project.manufacturer_id, installerId: project.installer_id, priceLevel: 'dealer',
+      extras: it.extras, colorId: it.colorId, hardwareKitId: it.hardwareKitId,
+      handleId: it.handleId, handleColorId: it.handleColorId, doorKit: it.doorKit,
+      turnProfile: it.turnProfile, frameAdapter: it.frameAdapter,
+    });
+    const itQty = it.qty || 1;
+    totalArea += (it.layout.width / 1000 * it.layout.height / 1000) * itQty;
+    c.lines.forEach(ln => aggregate.push({
+      ...ln, qtyNum: ln.qtyNum * itQty, price: ln.price * itQty,
+    }));
+  });
+  const merged = {};
+  for (const ln of aggregate) {
+    const k = ln.article + '|' + ln.label;
+    if (merged[k]) { merged[k].qtyNum += ln.qtyNum; merged[k].price += ln.price; }
+    else merged[k] = { ...ln };
+  }
+  const rows = Object.values(merged);
+
+  // Table header — bordered like the photo
+  doc.font('SansB').fontSize(8).fillColor(TEXT);
+  const colXs = [startX + 4, startX + 30, startX + 90, startX + 250, startX + 290, startX + 340, startX + 405, startX + 470];
+  const headers = ['№', 'Код', 'Наименование товара', 'Кол-во', 'Ед.', 'Цена', 'Цена со скидкой', 'Сумма со скидкой'];
+  doc.rect(startX, y, W, 18).fillAndStroke('#f0ece4', '#999');
+  doc.fillColor(TEXT);
+  headers.forEach((hd, i) => {
+    doc.text(hd, colXs[i], y + 5, { width: (colXs[i + 1] || startX + W) - colXs[i] - 4, align: i === 0 ? 'center' : 'left', ellipsis: true });
+  });
+  y += 18;
+
+  // Rows
+  doc.font('Sans').fontSize(8).fillColor(TEXT);
+  let totalSum = 0;
+  rows.forEach((r, idx) => {
+    if (y > doc.page.height - 110) { doc.addPage(); y = 40; }
+    const discounted = Math.round(r.unitPrice * 0.85);
+    const lineTotal = Math.round(r.qtyNum * discounted);
+    totalSum += lineTotal;
+    // alt-row bg
+    if (idx % 2 === 0) doc.rect(startX, y, W, 14).fill('#faf7f1');
+    doc.fillColor(TEXT).font('Mono').fontSize(7);
+    doc.text(String(idx + 1), colXs[0], y + 3, { width: 22, align: 'center' });
+    doc.text(r.article || '—', colXs[1], y + 3, { width: 56, ellipsis: true });
+    doc.font('Sans').fontSize(7).text(r.label || '', colXs[2], y + 3, { width: 158, ellipsis: true });
+    doc.font('Mono').fontSize(7).text(num(r.qtyNum), colXs[3], y + 3, { width: 36, align: 'right' });
+    doc.text(r.unit || '', colXs[4], y + 3, { width: 46, align: 'left' });
+    doc.text(num(r.unitPrice), colXs[5], y + 3, { width: 60, align: 'right' });
+    doc.text(num(discounted), colXs[6], y + 3, { width: 60, align: 'right' });
+    doc.font('SansB').fontSize(7).fillColor(TEXT).text(num(lineTotal), colXs[7], y + 3, { width: 80, align: 'right' });
+    y += 14;
+  });
+
+  // ── Phase 5: Assembly fee row (separate from goods)
+  const assemblyAmount = (project.assembly_per_m2 || 0) > 0
+    ? Math.round((project.assembly_per_m2 || 0) * totalArea)
+    : (project.assembly_fee || 0);
+
+  if (y > doc.page.height - 100) { doc.addPage(); y = 40; }
+  // Total row — "Итого"
+  y += 6;
+  doc.moveTo(startX, y).lineTo(startX + W, y).strokeColor(TEXT).lineWidth(0.6).stroke();
+  y += 6;
+  doc.font('SansB').fontSize(9).fillColor(TEXT).text('Итого:', colXs[5], y);
+  doc.font('Mono').fontSize(10).fillColor(TEXT).text(num(totalSum) + ' ₸', colXs[7] - 10, y, { width: 90, align: 'right' });
+  y += 14;
+  doc.font('Sans').fontSize(8).fillColor(MUTED).text('В том числе НДС 12%:', colXs[5], y);
+  doc.font('Mono').fontSize(8).fillColor(MUTED).text(num(Math.round(totalSum * 0.12 / 1.12)), colXs[7] - 10, y, { width: 90, align: 'right' });
+  y += 18;
+
+  // Handwritten-style summary block (like the photo: "сборка: 78 600 тг" + total)
+  if (assemblyAmount > 0) {
+    doc.font('Sans').fontSize(10).fillColor(ACCENT_DARK).text('сборка:', startX + W - 200, y);
+    doc.font('SansB').fontSize(11).fillColor(ACCENT_DARK).text(num(assemblyAmount) + ' тг', startX + W - 110, y, { width: 100, align: 'right' });
+    y += 16;
+    doc.moveTo(startX + W - 200, y).lineTo(startX + W, y).strokeColor(TEXT).lineWidth(0.5).stroke();
+    y += 4;
+    doc.font('SansB').fontSize(13).fillColor(TEXT).text(num(totalSum + assemblyAmount) + ' тг', startX + W - 110, y, { width: 100, align: 'right' });
+    y += 24;
+  }
+
+  // Signatures footer
+  doc.font('Sans').fontSize(8).fillColor(MUTED);
+  doc.text('Оформил: ' + (project.responsible || installer?.name || 'Raimbek'), startX, y);
+  doc.text('Получил: ___________________', startX + W / 2, y);
+
+  // Footer with platform info
+  const footerY = doc.page.height - 40;
+  doc.font('SansB').fontSize(9).fillColor(ACCENT).text('PROFCALC', startX, footerY);
+  doc.font('Sans').fontSize(7).fillColor(MUTED).text(
+    'PLUR Solutions, Алматы · Сформировано автоматически · Каталог: ' + (project.catalog || 'Logikal 12.6'),
+    startX + 60, footerY + 2);
+
+  return doc;
+}

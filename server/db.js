@@ -353,6 +353,15 @@ db.exec(`CREATE TABLE IF NOT EXISTS projects (
 try {
   const cols = db.prepare("PRAGMA table_info(projects)").all().map(c => c.name);
   if (!cols.includes('markup_pct')) db.exec("ALTER TABLE projects ADD COLUMN markup_pct REAL NOT NULL DEFAULT 0");
+  // ── Phase 5: factory/order tracking fields
+  if (!cols.includes('object_name'))    db.exec("ALTER TABLE projects ADD COLUMN object_name TEXT");
+  if (!cols.includes('responsible'))    db.exec("ALTER TABLE projects ADD COLUMN responsible TEXT");
+  if (!cols.includes('warehouse'))      db.exec("ALTER TABLE projects ADD COLUMN warehouse TEXT DEFAULT 'Центральный склад'");
+  if (!cols.includes('order_number'))   db.exec("ALTER TABLE projects ADD COLUMN order_number TEXT");
+  if (!cols.includes('catalog'))        db.exec("ALTER TABLE projects ADD COLUMN catalog TEXT");
+  if (!cols.includes('client_code'))    db.exec("ALTER TABLE projects ADD COLUMN client_code TEXT");
+  if (!cols.includes('assembly_fee'))   db.exec("ALTER TABLE projects ADD COLUMN assembly_fee INTEGER NOT NULL DEFAULT 0");
+  if (!cols.includes('assembly_per_m2')) db.exec("ALTER TABLE projects ADD COLUMN assembly_per_m2 INTEGER NOT NULL DEFAULT 0");
 } catch {}
 // Personal markup belongs to the installer's profile (not per-project)
 try {

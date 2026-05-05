@@ -88,6 +88,10 @@
       // Defaults to "all". User can flip individual categories on/off.
       scope: ['profile', 'hardware', 'glazing', 'reinforcement', 'sealing', 'consumables', 'extras'],
       items: [],
+      // ── Phase 5: factory/order fields
+      objectName: '', responsible: '', warehouse: 'Центральный склад',
+      orderNumber: '', clientCode: '', catalog: 'Logikal 12.6',
+      assemblyFee: 0, assemblyPerM2: 0,
     },
     activeIdx: 0,            // currently edited item
     selected: { ri: 0, ci: 0 },
@@ -372,6 +376,11 @@
       clientName: p.client_name || '', clientPhone: p.client_phone || '', clientAddress: p.client_address || '',
       manufacturerId: p.manufacturer_id || 'm-rehau',
       items: p.items || [],
+      objectName: p.object_name || '', responsible: p.responsible || '',
+      warehouse: p.warehouse || 'Центральный склад',
+      orderNumber: p.order_number || '', clientCode: p.client_code || '',
+      catalog: p.catalog || 'Logikal 12.6',
+      assemblyFee: p.assembly_fee || 0, assemblyPerM2: p.assembly_per_m2 || 0,
     };
     state.activeIdx = 0;
     state.lastResult = p.totals || null;
@@ -384,6 +393,9 @@
       clientName: '', clientPhone: '', clientAddress: '',
       manufacturerId: 'm-rehau',
       items: [blankItem()],
+      objectName: '', responsible: '', warehouse: 'Центральный склад',
+      orderNumber: '', clientCode: '', catalog: 'Logikal 12.6',
+      assemblyFee: 0, assemblyPerM2: 0,
     };
     state.activeIdx = 0;
     state.lastResult = null;
@@ -434,6 +446,9 @@
 
       // Client info card (always visible — required for КП)
       body.appendChild(clientCard());
+
+      // ── Phase 5: factory order card (object/responsible/warehouse/orderNumber + assembly fee)
+      body.appendChild(orderCard());
 
       // Items
       body.appendChild(h('div', { class: 'section-label', style: 'display:flex;justify-content:space-between;align-items:baseline' }, [
@@ -546,6 +561,73 @@
       return card;
     }
 
+    // ── Phase 5: order card — Logikal-style metadata block
+    function orderCard() {
+      const p = state.project;
+      const filled = p.objectName || p.responsible || p.orderNumber;
+      return h('div', { class: 'card pad', style: 'margin-bottom:14px' }, [
+        h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px' }, [
+          h('div', { style: 'font-size:13px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px' }, 'Заказ-накладная'),
+          h('button', { class: 'btn-ghost', style: 'background:none;border:none;font-size:13px;font-weight:600;color:var(--accent);padding:0', onClick: editOrderSheet }, filled ? 'Изменить' : 'Заполнить'),
+        ]),
+        filled
+          ? h('div', { style: 'font-size:13px;font-family:var(--mono);color:var(--text);line-height:1.55' }, [
+              p.objectName ? h('div', {}, 'Объект: ' + p.objectName) : null,
+              p.responsible ? h('div', {}, 'Отв.: ' + p.responsible) : null,
+              p.orderNumber ? h('div', {}, '№ ' + p.orderNumber + ' · ' + (p.warehouse || '—')) : null,
+              (p.assemblyFee > 0 || p.assemblyPerM2 > 0)
+                ? h('div', { style: 'color:var(--accent-dark);font-weight:600;margin-top:4px' },
+                    'Сборка: ' + (p.assemblyPerM2 > 0 ? fmtNum(p.assemblyPerM2) + ' ₸/м²' : fmtKZT(p.assemblyFee)))
+                : null,
+            ])
+          : h('div', { style: 'color:var(--muted);font-size:13.5px;font-style:italic' }, 'Объект, отв. лицо, склад, № заказа, сборка — для накладной'),
+        p.id ? h('button', {
+          class: 'btn btn-secondary', style: 'width:100%;margin-top:10px;font-size:12px',
+          onClick: () => {
+            const url = window.location.origin + '/api/projects/' + p.id + '/invoice.pdf';
+            if (tg?.openLink) tg.openLink(url, { try_instant_view: false }); else window.open(url, '_blank');
+          },
+        }, '📥 Скачать заявку-накладную PDF') : null,
+      ]);
+    }
+    function editOrderSheet() {
+      const p = state.project;
+      const f = {
+        objectName: p.objectName || '', responsible: p.responsible || '',
+        warehouse: p.warehouse || 'Центральный склад', orderNumber: p.orderNumber || '',
+        clientCode: p.clientCode || '', catalog: p.catalog || 'Logikal 12.6',
+        assemblyFee: p.assemblyFee || 0, assemblyPerM2: p.assemblyPerM2 || 0,
+      };
+      sheet({
+        title: 'Поля заказа-накладной',
+        body: [
+          h('div', { class: 'label-line' }, 'Объект (название)'),
+          h('input', { class: 'tinp', value: f.objectName, oninput: e => f.objectName = e.target.value }),
+          h('div', { class: 'label-line' }, 'Ответственное лицо'),
+          h('input', { class: 'tinp', value: f.responsible, oninput: e => f.responsible = e.target.value }),
+          h('div', { class: 'label-line' }, 'Склад'),
+          h('input', { class: 'tinp', value: f.warehouse, oninput: e => f.warehouse = e.target.value }),
+          h('div', { class: 'label-line' }, '№ заказа'),
+          h('input', { class: 'tinp', value: f.orderNumber, oninput: e => f.orderNumber = e.target.value, placeholder: 'auto-сгенерируется' }),
+          h('div', { class: 'label-line' }, 'Код клиента'),
+          h('input', { class: 'tinp', value: f.clientCode, oninput: e => f.clientCode = e.target.value, placeholder: '120-100-0001' }),
+          h('div', { class: 'label-line' }, 'Каталог'),
+          h('input', { class: 'tinp', value: f.catalog, oninput: e => f.catalog = e.target.value }),
+          h('div', { class: 'label-line', style: 'margin-top:10px' }, 'Сборка — фикс. сумма (₸)'),
+          h('input', { class: 'tinp', type: 'number', value: f.assemblyFee, oninput: e => f.assemblyFee = parseInt(e.target.value, 10) || 0 }),
+          h('div', { class: 'label-line' }, 'Сборка — за м² (₸/м²)'),
+          h('input', { class: 'tinp', type: 'number', value: f.assemblyPerM2, oninput: e => f.assemblyPerM2 = parseInt(e.target.value, 10) || 0 }),
+          h('div', { style: 'font-size:11px;color:var(--muted);margin-top:8px;line-height:1.4' },
+            'Если задан "за м²" — он перебивает фикс. сумму.'),
+        ],
+        submit: 'Сохранить',
+        onSubmit: () => {
+          Object.assign(p, f);
+          paint();
+        },
+      });
+    }
+
     function clientCard() {
       return h('div', { class: 'card pad', style: 'margin-bottom:14px' }, [
         h('div', { style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px' }, [
@@ -651,6 +733,10 @@
           clientName: state.project.clientName, clientPhone: state.project.clientPhone, clientAddress: state.project.clientAddress,
           manufacturerId: state.project.manufacturerId,
           items: state.project.items,
+          objectName: state.project.objectName, responsible: state.project.responsible,
+          warehouse: state.project.warehouse, orderNumber: state.project.orderNumber,
+          clientCode: state.project.clientCode, catalog: state.project.catalog,
+          assemblyFee: state.project.assemblyFee, assemblyPerM2: state.project.assemblyPerM2,
         };
         if (state.project.id) {
           await api('/projects/' + state.project.id, { method: 'PUT', body: JSON.stringify(body) });

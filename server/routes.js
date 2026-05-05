@@ -3,7 +3,7 @@ import express from 'express';
 import db, { logEvent } from './db.js';
 import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom } from './calc.js';
 import { verifyInitData } from './telegram-auth.js';
-import { buildKpPdf } from './pdf.js';
+import { buildKpPdf, buildInvoicePdf } from './pdf.js';
 
 const BOT_TOKEN = process.env.BOT_TOKEN || '8674981496:AAFCDyX7K_oW9WvHO36Mo8cSadeUSeIIkbI';
 
@@ -494,8 +494,9 @@ api.post('/projects', (req, res) => {
     }) : { subtotal: 0, discount: 0, total: 0, perItem: [], markup: 0, markupPct };
     const id = 'p-' + Date.now().toString(36);
     db.prepare(`INSERT INTO projects
-      (id, owner, installer_id, client_id, client_name, client_phone, client_address, name, items, totals, manufacturer_id, status, markup_pct)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      (id, owner, installer_id, client_id, client_name, client_phone, client_address, name, items, totals, manufacturer_id, status, markup_pct,
+       object_name, responsible, warehouse, order_number, catalog, client_code, assembly_fee, assembly_per_m2)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         id, owner, installerId,
         req.body.clientId || null,
         req.body.clientName || null,
@@ -507,6 +508,14 @@ api.post('/projects', (req, res) => {
         req.body.manufacturerId || null,
         req.body.status || 'draft',
         markupPct,
+        req.body.objectName || req.body.clientName || null,
+        req.body.responsible || (req.installer?.name || null),
+        req.body.warehouse || 'Центральный склад',
+        req.body.orderNumber || null,
+        req.body.catalog || 'Logikal 12.6',
+        req.body.clientCode || null,
+        Math.max(0, parseInt(req.body.assemblyFee, 10) || 0),
+        Math.max(0, parseInt(req.body.assemblyPerM2, 10) || 0),
       );
     if (installerId) db.prepare('UPDATE installers SET calcs = calcs + 1 WHERE id = ?').run(installerId);
     logEvent(installerId || owner, 'project.create', `${id} · ${items.length} поз. → ${computed.total}₸`);
@@ -550,7 +559,9 @@ api.put('/projects/:id', (req, res) => {
     manufacturerId: req.body.manufacturerId || cur.manufacturer_id,
     markupPct,
   }) : { subtotal: 0, discount: 0, total: 0, perItem: [], markup: 0, markupPct };
-  db.prepare(`UPDATE projects SET name=?, items=?, totals=?, client_id=?, client_name=?, client_phone=?, client_address=?, manufacturer_id=?, status=?, markup_pct=?, updated_at=strftime('%s','now') WHERE id=?`).run(
+  db.prepare(`UPDATE projects SET name=?, items=?, totals=?, client_id=?, client_name=?, client_phone=?, client_address=?, manufacturer_id=?, status=?, markup_pct=?,
+    object_name=?, responsible=?, warehouse=?, order_number=?, catalog=?, client_code=?, assembly_fee=?, assembly_per_m2=?,
+    updated_at=strftime('%s','now') WHERE id=?`).run(
     req.body.name ?? cur.name,
     JSON.stringify(items),
     JSON.stringify(computed),
@@ -561,10 +572,41 @@ api.put('/projects/:id', (req, res) => {
     req.body.manufacturerId ?? cur.manufacturer_id,
     req.body.status ?? cur.status,
     markupPct,
+    req.body.objectName ?? cur.object_name,
+    req.body.responsible ?? cur.responsible,
+    req.body.warehouse ?? cur.warehouse,
+    req.body.orderNumber ?? cur.order_number,
+    req.body.catalog ?? cur.catalog,
+    req.body.clientCode ?? cur.client_code,
+    req.body.assemblyFee != null ? Math.max(0, parseInt(req.body.assemblyFee, 10) || 0) : cur.assembly_fee,
+    req.body.assemblyPerM2 != null ? Math.max(0, parseInt(req.body.assemblyPerM2, 10) || 0) : cur.assembly_per_m2,
     req.params.id,
   );
   logEvent(installerId || 'anon', 'project.update', req.params.id);
   res.json({ ok: true, ...computed });
+});
+
+// ── Phase 5: Invoice PDF (Заявка-накладная) for a saved project ─────────
+api.get('/projects/:id/invoice.pdf', (req, res) => {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!project) return res.status(404).send('not found');
+  const installer = project.installer_id ? db.prepare('SELECT * FROM installers WHERE id = ?').get(project.installer_id) : null;
+  // Auto-generate order_number if missing
+  if (!project.order_number) {
+    const seq = String(db.prepare('SELECT COUNT(*) AS c FROM projects WHERE order_number IS NOT NULL').get().c + 1).padStart(5, '0');
+    db.prepare('UPDATE projects SET order_number = ? WHERE id = ?').run(seq, project.id);
+    project.order_number = seq;
+  }
+  try {
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="invoice-${project.order_number}.pdf"`);
+    const doc = buildInvoicePdf(project, installer || { name: 'PLUR Solutions', city: 'Алматы', phone: '+7 727 000 00 00' });
+    doc.pipe(res);
+    doc.end();
+  } catch (e) {
+    console.error('Invoice PDF error:', e);
+    if (!res.headersSent) res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Phase 4: BOM (Logikal-style materials list) for a saved project ─────
