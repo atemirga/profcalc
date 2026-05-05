@@ -930,19 +930,53 @@
         }),
       ));
 
-      // Drawing surface
+      // Drawing surface — Phase 11+17: view toggle (Анфас / Профиль / 3D)
       body.appendChild(h('div', { class: 'section-label' }, 'Конструкция'));
       const drawCard = h('div', { class: 'card pad', style: 'margin-bottom:14px' });
       drawCard.appendChild(h('div', { class: 'size-line' }, [
         h('div', { class: 'dims' }, `${item.layout.width} × ${item.layout.height} мм`),
         h('button', { class: 'edit', onClick: openTotalSizeSheet }, 'Размер ✎'),
       ]));
+      // View mode toggle
+      const viewMode = state._viewMode || 'front';
+      const viewTabs = [
+        ['front',   'Анфас',     'фронтальный вид'],
+        ['section', 'Профиль',   'разрез/сечение'],
+        ['iso',     '3D',        'изометрия'],
+      ];
+      drawCard.appendChild(h('div', { style: 'display:flex;gap:6px;margin-bottom:10px' },
+        viewTabs.map(([k, lbl, sub]) => h('button', {
+          onClick: () => { state._viewMode = k; paint(); },
+          style: `flex:1;padding:7px 10px;border-radius:7px;border:1.5px solid ${viewMode === k ? 'var(--accent)' : 'var(--rule)'};background:${viewMode === k ? 'var(--accent)' : '#fff'};color:${viewMode === k ? '#fff' : 'var(--text)'};font-size:12px;font-weight:${viewMode === k ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:1px`,
+        }, [
+          h('span', { style: 'font-weight:600' }, lbl),
+          h('span', { style: `font-size:10px;color:${viewMode === k ? 'rgba(255,255,255,.85)' : 'var(--muted)'}` }, sub),
+        ]))),
+      );
+
       const drawWrap = h('div', { class: 'draw' });
-      drawWrap.appendChild(window.WindowSchema({
-        w: 320, h: 240, layout: item.layout, showDims: true,
-        highlight: state.selected ? `${state.selected.ri}:${state.selected.ci}` : null,
-        onPick: (ri, ci) => { state.selected = { ri, ci }; openSectionSheet(ri, ci); paint(); },
-      }));
+      const sysObj = state.cache.systems.find(s => s.id === item.systemId);
+      const glObj  = state.cache.glazing.find(g => g.id === item.glazingId);
+      if (viewMode === 'front') {
+        drawWrap.appendChild(window.WindowSchema({
+          w: 320, h: 240, layout: item.layout, showDims: true,
+          highlight: state.selected ? `${state.selected.ri}:${state.selected.ci}` : null,
+          onPick: (ri, ci) => { state.selected = { ri, ci }; openSectionSheet(ri, ci); paint(); },
+        }));
+      } else if (viewMode === 'section') {
+        drawWrap.appendChild(window.WindowSection({
+          w: 460, h: 220, depth: sysObj?.depth || 70,
+          glazingDepth: glObj?.thickness || 32,
+          glazingFormula: glObj?.formula || '4-10-4-10-4',
+          frameWidth: sysObj?.depth || 70,
+          sashWidth: (sysObj?.depth || 70) + 6,
+          label: 'Сечение: рама → створка → стеклопакет',
+        }));
+      } else if (viewMode === 'iso') {
+        drawWrap.appendChild(window.WindowIsometric({
+          w: 360, h: 280, layout: item.layout, depth: sysObj?.depth || 70,
+        }));
+      }
       drawCard.appendChild(drawWrap);
       body.appendChild(drawCard);
 
@@ -1380,14 +1414,45 @@
 
     function openTotalSizeSheet() {
       const f = { width: item.layout.width, height: item.layout.height };
+      // Live area + section count + glass-area summary
+      const previewEl = h('div', { style: 'background:#faf7f1;border-radius:8px;padding:10px 12px;margin-top:8px;font-size:12px;line-height:1.55;color:var(--text);font-family:var(--mono)' });
+      function refreshPreview() {
+        const w = clampInt(f.width, 300, 8000);
+        const hM = clampInt(f.height, 300, 4000);
+        const areaM2 = (w / 1000 * hM / 1000).toFixed(2);
+        const perimM = (2 * (w + hM) / 1000).toFixed(2);
+        // Compute new section dimensions live (using normalize-like logic)
+        const rows = item.layout.rows || [];
+        const totalSec = rows.reduce((s, r) => s + r.sections.length, 0);
+        clear(previewEl);
+        previewEl.appendChild(h('div', { style: 'font-weight:600;color:var(--accent-dark);margin-bottom:4px;font-size:11px;text-transform:uppercase;letter-spacing:.4px' }, 'Превью размеров'));
+        previewEl.appendChild(h('div', {}, `${w} × ${hM} мм  ·  ${areaM2} м²  ·  периметр ${perimM} м`));
+        previewEl.appendChild(h('div', { style: 'color:var(--muted);font-size:11px;margin-top:3px' }, `${rows.length} ряд(ов), ${totalSec} секций`));
+        // Live glass list preview
+        const glassRows = computeLiveGlasses({ ...item.layout, width: w, height: hM });
+        if (glassRows.length) {
+          previewEl.appendChild(h('div', { style: 'margin-top:6px;padding-top:6px;border-top:1px dashed var(--rule);color:var(--muted);font-size:11px' }, 'Стеклопакеты:'));
+          glassRows.slice(0, 8).forEach(g => previewEl.appendChild(h('div', { style: 'font-size:11px;color:var(--text);font-family:var(--mono)' }, `· ${g.label} ${g.wMm}×${g.hMm} мм`)));
+          if (glassRows.length > 8) previewEl.appendChild(h('div', { style: 'font-size:11px;color:var(--muted)' }, `+ ещё ${glassRows.length - 8}…`));
+        }
+      }
       sheet({
         title: 'Общий размер, мм',
         body: [
           h('div', { class: 'grid', style: 'grid-template-columns:1fr 1fr' }, [
-            h('div', {}, [h('div', { class: 'label-line' }, 'Ширина'), numInput(f, 'width', 300, 8000)]),
-            h('div', {}, [h('div', { class: 'label-line' }, 'Высота'), numInput(f, 'height', 300, 4000)]),
+            h('div', {}, [h('div', { class: 'label-line' }, 'Ширина'), (() => {
+              const i = h('input', { type: 'number', class: 'num', value: f.width, min: 300, max: 8000 });
+              i.addEventListener('input', () => { f.width = i.value; refreshPreview(); });
+              return i;
+            })()]),
+            h('div', {}, [h('div', { class: 'label-line' }, 'Высота'), (() => {
+              const i = h('input', { type: 'number', class: 'num', value: f.height, min: 300, max: 4000 });
+              i.addEventListener('input', () => { f.height = i.value; refreshPreview(); });
+              return i;
+            })()]),
           ]),
-          h('div', { style: 'font-size:11px;color:var(--muted);margin-top:8px;line-height:1.4' }, 'Допустимо: 300–8000 мм по ширине, 300–4000 мм по высоте (для витражей и панорам).'),
+          previewEl,
+          h('div', { style: 'font-size:11px;color:var(--muted);margin-top:8px;line-height:1.4' }, 'Допустимо: 300–8000 мм по ширине, 300–4000 мм по высоте.'),
         ],
         submit: 'OK',
         onSubmit: () => {
@@ -1396,11 +1461,71 @@
           paint();
         },
       });
+      refreshPreview();
+    }
+    // Compute glass-pack inner dimensions from a layout object (live preview)
+    function computeLiveGlasses(layout) {
+      const out = [];
+      function normalize(arr, total, key) {
+        const fixedSum = arr.reduce((s, x) => s + (x[key] || 0), 0);
+        const ratioItems = arr.filter(x => !x[key]);
+        const remaining = Math.max(0, total - fixedSum);
+        const ratioSum = ratioItems.reduce((s, x) => s + (x.ratio ?? 1), 0) || 1;
+        return arr.map(x => x[key] ? x[key] : remaining * (x.ratio ?? 1) / ratioSum);
+      }
+      const rowHs = normalize(layout.rows || [], layout.height, 'height_mm');
+      layout.rows.forEach((row, ri) => {
+        const rowH = rowHs[ri];
+        const colWs = normalize(row.sections || [], layout.width, 'width_mm');
+        row.sections.forEach((sec, ci) => {
+          const sw = colWs[ci];
+          const code = sec.opening || 'FIX';
+          const isFix = code === 'FIX' || code.endsWith('-FIX');
+          const inset = isFix ? 5 : 70;
+          const gW = Math.max(0, Math.round(sw - 2 * inset));
+          const gH = Math.max(0, Math.round(rowH - 2 * inset));
+          if (gW > 0 && gH > 0) out.push({ label: `Р${ri + 1}С${ci + 1}`, wMm: gW, hMm: gH, isFix });
+        });
+      });
+      return out;
     }
     function openSectionSheet(ri, ci) {
       const row = item.layout.rows[ri];
       const sec = row.sections[ci];
-      const f = { opening: sec.opening || 'FIX', width_mm: sec.width_mm || '', height_mm: row.height_mm || '' };
+      const f = { opening: sec.opening || 'FIX', width_mm: sec.width_mm || '', height_mm: row.height_mm || '',
+                  muntinsRows: sec.muntins?.rows || 0, muntinsCols: sec.muntins?.cols || 0 };
+      // Live preview element — recomputes on every input
+      const livePrev = h('div', { style: 'background:#faf7f1;border-radius:8px;padding:10px 12px;font-size:12px;font-family:var(--mono);color:var(--text);line-height:1.55;margin-top:10px' });
+      function recalcLive() {
+        clear(livePrev);
+        // Reconstruct hypothetical layout to compute this section's live dimensions
+        const hypoRows = JSON.parse(JSON.stringify(item.layout.rows));
+        if (f.width_mm)  hypoRows[ri].sections[ci].width_mm = +f.width_mm;
+        else delete hypoRows[ri].sections[ci].width_mm;
+        if (f.height_mm) hypoRows[ri].height_mm = +f.height_mm;
+        else delete hypoRows[ri].height_mm;
+        const glasses = computeLiveGlasses({ width: item.layout.width, height: item.layout.height, rows: hypoRows });
+        // Find this section's dims
+        const me = glasses.find(g => g.label === `Р${ri + 1}С${ci + 1}`);
+        const isFix = f.opening === 'FIX' || f.opening.endsWith('-FIX');
+        livePrev.appendChild(h('div', { style: 'font-weight:600;color:var(--accent-dark);font-size:11px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px' }, 'Превью'));
+        if (me) {
+          livePrev.appendChild(h('div', {}, `Стеклопакет: ${me.wMm} × ${me.hMm} мм  ·  ${(me.wMm * me.hMm / 1e6).toFixed(3)} м²`));
+          livePrev.appendChild(h('div', { style: 'font-size:11px;color:var(--muted)' }, `Inset = ${isFix ? '5 мм (глухое)' : '70 мм (створка)'}`));
+        }
+        if (f.muntinsRows > 0 || f.muntinsCols > 0) {
+          livePrev.appendChild(h('div', { style: 'font-size:11px;color:var(--accent);margin-top:4px' }, `Шпрос: ${f.muntinsRows}×${f.muntinsCols} = ${f.muntinsRows * f.muntinsCols + f.muntinsRows + f.muntinsCols} ячеек`));
+        }
+      }
+      const wInp = h('input', { type: 'number', class: 'num', value: f.width_mm || '', min: 0, max: 8000, placeholder: 'авто' });
+      wInp.addEventListener('input', () => { f.width_mm = wInp.value; recalcLive(); });
+      const hInp = h('input', { type: 'number', class: 'num', value: f.height_mm || '', min: 0, max: 4000, placeholder: 'авто' });
+      hInp.addEventListener('input', () => { f.height_mm = hInp.value; recalcLive(); });
+      const muRowsInp = h('input', { type: 'number', class: 'num', value: f.muntinsRows, min: 0, max: 8, placeholder: '0' });
+      muRowsInp.addEventListener('input', () => { f.muntinsRows = parseInt(muRowsInp.value, 10) || 0; recalcLive(); });
+      const muColsInp = h('input', { type: 'number', class: 'num', value: f.muntinsCols, min: 0, max: 8, placeholder: '0' });
+      muColsInp.addEventListener('input', () => { f.muntinsCols = parseInt(muColsInp.value, 10) || 0; recalcLive(); });
+
       sheet({
         title: `Ряд ${ri + 1} · Секция ${ci + 1}`,
         body: [
@@ -1411,7 +1536,7 @@
               clear(grid);
               state.cache.openings.forEach(o => {
                 const sel = o.code === f.opening;
-                const btn = h('button', { class: 'opt' + (sel ? ' sel' : ''), onClick: () => { f.opening = o.code; refresh(); } }, [
+                const btn = h('button', { class: 'opt' + (sel ? ' sel' : ''), onClick: () => { f.opening = o.code; refresh(); recalcLive(); } }, [
                   h('div', { class: 'glyph' }), h('div', { class: 'code' }, o.code),
                 ]);
                 btn.querySelector('.glyph').appendChild(window.MiniOpeningGlyph(o.code, sel ? '#fff' : '#1f1d1a'));
@@ -1421,8 +1546,18 @@
             refresh();
             return grid;
           })(),
-          h('div', { style: 'margin-top:14px' }, [h('div', { class: 'label-line' }, 'Ширина секции, мм (пусто = авто)'), numInputOpt(f, 'width_mm', 0, 8000)]),
-          h('div', { style: 'margin-top:14px' }, [h('div', { class: 'label-line' }, 'Высота ряда, мм (пусто = авто)'), numInputOpt(f, 'height_mm', 0, 4000)]),
+          h('div', { style: 'margin-top:14px' }, [h('div', { class: 'label-line' }, 'Ширина секции, мм (пусто = авто)'), wInp]),
+          h('div', { style: 'margin-top:14px' }, [h('div', { class: 'label-line' }, 'Высота ряда, мм (пусто = авто)'), hInp]),
+          // ── Phase 13: muntins (шпрос декоративный)
+          h('div', { style: 'margin-top:14px' }, [
+            h('div', { class: 'label-line' }, 'Шпрос (декоративный сеточный импост)'),
+            h('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:8px' }, [
+              h('div', {}, [h('div', { style: 'font-size:11px;color:var(--muted);margin-bottom:3px' }, 'Гориз. перекладин'), muRowsInp]),
+              h('div', {}, [h('div', { style: 'font-size:11px;color:var(--muted);margin-bottom:3px' }, 'Верт. перекладин'), muColsInp]),
+            ]),
+            h('div', { style: 'font-size:11px;color:var(--muted);margin-top:4px;line-height:1.4' }, '0/0 = без шпроса. Например, 1×1 = «Виндзор», 2×3 = «Английский».'),
+          ]),
+          livePrev,
           h('div', { style: 'margin-top:18px;display:flex;gap:8px' }, [
             h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => { closeSheet(); deleteSection(); } }, 'Удалить секцию'),
             h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => { closeSheet(); deleteRow(ri); } }, 'Удалить ряд'),
@@ -1433,9 +1568,16 @@
           sec.opening = f.opening;
           sec.width_mm = f.width_mm ? clampInt(f.width_mm, 100, 8000) : null;
           row.height_mm = f.height_mm ? clampInt(f.height_mm, 100, 4000) : null;
+          // Phase 13: muntins
+          if (f.muntinsRows > 0 || f.muntinsCols > 0) {
+            sec.muntins = { rows: f.muntinsRows, cols: f.muntinsCols };
+          } else {
+            delete sec.muntins;
+          }
           paint();
         },
       });
+      recalcLive();
     }
     function addRowAbove() { item.layout.rows.splice(state.selected.ri, 0, { sections: [{ opening: 'FIX' }] }); paint(); }
     function addRowBelow() { item.layout.rows.splice(state.selected.ri + 1, 0, { sections: [{ opening: 'FIX' }] }); state.selected.ri++; paint(); }

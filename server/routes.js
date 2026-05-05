@@ -610,6 +610,69 @@ api.get('/projects/:id/invoice.pdf', (req, res) => {
   }
 });
 
+// ── Phase 14: unified materials index — all SKUs from 11 catalogs in one feed
+api.get('/materials', (req, res) => {
+  const search = (req.query.search || '').toLowerCase().trim();
+  const groups = [];
+  function group(id, title, rows, project) {
+    const items = rows.map(project);
+    const filtered = search ? items.filter(i =>
+      (i.name || '').toLowerCase().includes(search) ||
+      (i.code || '').toLowerCase().includes(search) ||
+      (i.vendor || '').toLowerCase().includes(search)) : items;
+    if (filtered.length) groups.push({ id, title, count: filtered.length, items: filtered });
+  }
+  group('profile_parts', 'Профили (рама/створка/импост/штапик/штульп/порог/доб.)',
+    db.prepare('SELECT * FROM profile_parts').all(),
+    r => ({ id: r.id, name: r.name, code: r.code, vendor: r.system_id, kind: r.kind,
+            unit: 'м', price: r.price_per_m, sub: `${r.kind} · ${r.width_mm || ''} мм` }));
+  group('hardware_kits', 'Фурнитурные комплекты',
+    db.prepare('SELECT * FROM hardware_kits').all(),
+    r => ({ id: r.id, name: r.name, code: r.id, vendor: r.vendor, kind: r.kind,
+            unit: 'компл.', price: r.price_per_sash, sub: `${r.kind}${r.notes ? ' · ' + r.notes : ''}` }));
+  group('handles', 'Ручки',
+    db.prepare('SELECT * FROM handles').all(),
+    r => ({ id: r.id, name: r.name, code: r.id, vendor: r.vendor, kind: r.kind,
+            unit: 'шт', price: r.price, sub: r.kind }));
+  group('door_hardware', 'Дверной комплект (замок/петля/доводчик/...)',
+    db.prepare('SELECT * FROM door_hardware').all(),
+    r => ({ id: r.id, name: r.name, code: r.id, vendor: r.vendor, kind: r.category,
+            unit: r.unit, price: r.price, sub: `${r.category}${r.notes ? ' · ' + r.notes : ''}` }));
+  group('seals', 'Уплотнители',
+    db.prepare('SELECT * FROM seals').all(),
+    r => ({ id: r.id, name: r.name, code: r.code, vendor: '—', kind: r.position,
+            unit: 'м', price: r.price_per_m, sub: r.position }));
+  group('brackets', 'Уголки / сухари / соединители',
+    db.prepare('SELECT * FROM brackets').all(),
+    r => ({ id: r.id, name: r.name, code: r.code, vendor: '—', kind: r.category,
+            unit: r.unit, price: r.price_per_unit, sub: r.category }));
+  group('sills', 'Подоконники',
+    db.prepare('SELECT * FROM sills').all(),
+    r => ({ id: r.id, name: r.name, code: r.id, vendor: r.vendor, kind: 'sill',
+            unit: 'м', price: r.price_per_m, sub: `${r.width_mm} мм · ${r.color || ''}` }));
+  group('ebbs', 'Отливы',
+    db.prepare('SELECT * FROM ebbs').all(),
+    r => ({ id: r.id, name: r.material, code: r.id, vendor: r.material, kind: 'ebb',
+            unit: 'м', price: r.price_per_m, sub: `${r.width_mm} мм · ${r.color || ''}` }));
+  group('meshes', 'Сетки москитные',
+    db.prepare('SELECT * FROM meshes').all(),
+    r => ({ id: r.id, name: r.name, code: r.id, vendor: '—', kind: r.kind,
+            unit: r.unit, price: r.price_per_unit, sub: r.kind }));
+  group('colors', 'Цвета (RAL)',
+    db.prepare('SELECT * FROM colors').all(),
+    r => ({ id: r.id, name: r.name, code: r.ral, vendor: '—', kind: 'color',
+            unit: '%', price: r.surcharge_pct, sub: `наценка ${r.surcharge_pct}%`, hex: r.hex }));
+  group('door_types', 'Типы дверей',
+    db.prepare('SELECT * FROM door_types').all(),
+    r => ({ id: r.id, name: r.name, code: r.code, vendor: '—', kind: 'door_type',
+            unit: '×коэф', price: r.reinforcement_factor, sub: r.description || '' }));
+  res.json({
+    totalGroups: groups.length,
+    totalItems: groups.reduce((s, g) => s + g.count, 0),
+    groups,
+  });
+});
+
 // ── Phase 15: report index — list all available report URLs for a project
 api.get('/projects/:id/reports', (req, res) => {
   const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);

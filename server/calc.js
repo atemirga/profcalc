@@ -517,6 +517,38 @@ export function calcWindow(input) {
   // CON 11-4 sash-to-frame seal — sash perimeter
   if (sashPerimTotal > 0) sealLine('CON 11-4', sashPerimTotal);
 
+  // ── Phase 13: muntins (шпрос декоративный) — sum of horizontal + vertical bars per section
+  let muntinTotalM = 0;
+  let muntinSectionsCount = 0;
+  layout.rows.forEach((row, ri) => {
+    const rowHRel = rowHs[ri];
+    const colRatios = normalize(row.sections, width, 'width_mm');
+    row.sections.forEach((sec, ci) => {
+      if (!sec.muntins) return;
+      const mr = sec.muntins.rows || 0;
+      const mc = sec.muntins.cols || 0;
+      if (!mr && !mc) return;
+      const sw_m = w_m * colRatios[ci];
+      const code = sec.opening || 'FIX';
+      const isFix = code === 'FIX' || code.endsWith('-FIX');
+      const insetM = isFix ? 0.005 : sashFrameInset;
+      const gW = Math.max(0, sw_m   - 2 * insetM);
+      const gH = Math.max(0, rowHRel - 2 * insetM);
+      muntinTotalM += mr * gW + mc * gH;
+      muntinSectionsCount++;
+    });
+  });
+  if (muntinTotalM > 0) {
+    // Use sash bead price as a proxy (шпрос обычно из такого же штапика, тоньше — 18-25 мм)
+    const beadPart = db.prepare("SELECT * FROM profile_parts WHERE system_id = ? AND kind = 'bead' LIMIT 1").get(systemId);
+    const muntinUnitPrice = beadPart ? Math.round(beadPart.price_per_m * 1.4 * priceMultiplier(priceLevel)) : 1200;
+    allLines.push(tag(applySurcharge({
+      label: `Шпрос декоративный (${muntinSectionsCount} секц.)${colorTag}`,
+      qty: muntinTotalM.toFixed(2) + ' м', qtyNum: +muntinTotalM.toFixed(2), unit: 'м',
+      article: 'MUNTIN', unitPrice: muntinUnitPrice, price: Math.round(muntinTotalM * muntinUnitPrice),
+    }, colorSurchargePct), 'profile'));
+  }
+
   // ── Phase 3: brackets (сухари + соединители + крепёжные уголки)
   function brkLine(brkCode, qty) {
     if (qty <= 0) return;

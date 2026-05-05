@@ -809,18 +809,24 @@
 
   async function pageCatalogs() {
     const params = (window.location.hash.match(/^#\/catalogs(?:\/(.+))?/) || [])[1];
-    const activeId = params || CATALOGS[0].id;
+    const activeId = params || 'all';
+    if (activeId === 'all') return pageAllMaterials();
     const cat = CATALOGS.find(c => c.id === activeId) || CATALOGS[0];
 
     layout('catalogs', { title: 'Каталоги', subtitle: 'Цвета, фурнитура, профили, уплотнители, дверной комплект — всё в одном месте',
       actions: [h('button', { class: 'btn btn-accent', onClick: () => editRow(cat, {}, true) }, '+ Добавить запись')] },
       h('div', { class: 'card' }, [
         // tab strip
-        h('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;padding:14px;border-bottom:1px solid var(--rule)' },
-          CATALOGS.map(c => h('a', {
+        h('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;padding:14px;border-bottom:1px solid var(--rule)' }, [
+          h('a', {
+            href: '#/catalogs/all',
+            style: `padding:6px 12px;border-radius:6px;font-size:12.5px;text-decoration:none;color:${activeId === 'all' ? '#fff' : 'var(--text)'};background:${activeId === 'all' ? 'var(--accent)' : '#f5f2ec'};font-weight:${activeId === 'all' ? 700 : 500}`,
+          }, '★ Все материалы'),
+          ...CATALOGS.map(c => h('a', {
             href: '#/catalogs/' + c.id,
             style: `padding:6px 12px;border-radius:6px;font-size:12.5px;text-decoration:none;color:${c.id === activeId ? '#fff' : 'var(--text)'};background:${c.id === activeId ? 'var(--accent)' : '#f5f2ec'};font-weight:${c.id === activeId ? 600 : 500}`,
-          }, c.title))),
+          }, c.title)),
+        ]),
         // table
         h('div', { id: 'catalog-tbl', style: 'padding:0' }, h('div', { class: 'empty' }, 'Загрузка...')),
       ]));
@@ -846,6 +852,63 @@
       tbl.appendChild(t);
     } catch (e) {
       document.getElementById('catalog-tbl').innerHTML = '<div class="empty">Ошибка: ' + e.message + '</div>';
+    }
+  }
+
+  // ── Phase 14: unified all-materials page
+  async function pageAllMaterials() {
+    const search = window._matSearch || '';
+    layout('catalogs', { title: 'Все материалы', subtitle: 'Сводный каталог всех SKU из 11 справочников' },
+      h('div', { class: 'card' }, [
+        h('div', { style: 'display:flex;flex-wrap:wrap;gap:6px;padding:14px;border-bottom:1px solid var(--rule);align-items:center' }, [
+          h('a', { href: '#/catalogs/all', style: 'padding:6px 12px;border-radius:6px;font-size:12.5px;text-decoration:none;color:#fff;background:var(--accent);font-weight:700' }, '★ Все материалы'),
+          ...CATALOGS.map(c => h('a', {
+            href: '#/catalogs/' + c.id,
+            style: 'padding:6px 12px;border-radius:6px;font-size:12.5px;text-decoration:none;color:var(--text);background:#f5f2ec;font-weight:500',
+          }, c.title)),
+          h('input', {
+            type: 'text', placeholder: 'Поиск (название/код/бренд)…', value: search,
+            style: 'flex:1;min-width:180px;margin-left:auto;padding:7px 12px;border:1px solid var(--rule);border-radius:6px;font-size:12.5px',
+            oninput: (e) => { window._matSearch = e.target.value; clearTimeout(window._matSearchT); window._matSearchT = setTimeout(() => loadAllMaterials(), 300); },
+          }),
+        ]),
+        h('div', { id: 'all-mat-body', style: 'padding:0' }, h('div', { class: 'empty' }, 'Загрузка…')),
+      ]));
+    loadAllMaterials();
+  }
+  async function loadAllMaterials() {
+    const search = window._matSearch || '';
+    try {
+      const data = await api('/materials' + (search ? '?search=' + encodeURIComponent(search) : ''));
+      const wrap = document.getElementById('all-mat-body');
+      if (!wrap) return;
+      clear(wrap);
+      wrap.appendChild(h('div', { style: 'padding:10px 14px;background:#faf7f1;border-bottom:1px solid var(--rule);font-size:12px;color:var(--muted)' },
+        `Найдено: ${data.totalItems} SKU в ${data.totalGroups} группах`));
+      data.groups.forEach(g => {
+        wrap.appendChild(h('div', { style: 'padding:10px 14px;background:#fdfbf6;border-top:1px solid var(--rule);font-weight:600;color:var(--accent-dark);font-size:13px;display:flex;justify-content:space-between;align-items:baseline' }, [
+          h('span', {}, g.title),
+          h('span', { style: 'font-size:11px;color:var(--muted);font-weight:500' }, g.count + ' шт.'),
+        ]));
+        const t = h('table', { class: 'tbl', style: 'border:none' }, [
+          h('thead', {}, h('tr', {}, [
+            h('th', {}, 'ID'), h('th', {}, 'Код'), h('th', {}, 'Название'),
+            h('th', {}, 'Бренд / Тип'), h('th', { style: 'text-align:right' }, 'Цена'), h('th', {}, 'Ед.'),
+          ])),
+          h('tbody', {}, g.items.map(it => h('tr', {}, [
+            h('td', { class: 'mono', style: 'font-size:11px' }, it.id),
+            h('td', { class: 'mono' }, String(it.code || '—')),
+            h('td', {}, it.name + (it.sub ? h('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px' }, it.sub).outerHTML : '')),
+            h('td', {}, (it.vendor && it.vendor !== '—' ? it.vendor + ' · ' : '') + (it.kind || '')),
+            h('td', { class: 'mono', style: 'text-align:right' }, fmtNum(it.price || 0)),
+            h('td', {}, it.unit || ''),
+          ]))),
+        ]);
+        wrap.appendChild(t);
+      });
+    } catch (e) {
+      const wrap = document.getElementById('all-mat-body');
+      if (wrap) wrap.innerHTML = '<div class="empty">Ошибка: ' + e.message + '</div>';
     }
   }
 
