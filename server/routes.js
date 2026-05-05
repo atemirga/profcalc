@@ -1,7 +1,7 @@
 // server/routes.js — REST API for admin + mini-app
 import express from 'express';
 import db, { logEvent } from './db.js';
-import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom, buildCutList, packStockBars, buildGlassList } from './calc.js';
+import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom, buildCutList, packStockBars, buildGlassList, calcFacade } from './calc.js';
 import { verifyInitData } from './telegram-auth.js';
 import { buildKpPdf, buildInvoicePdf, buildSingleItemKpPdf, buildGlassSpecPdf, buildHardwareSpecPdf } from './pdf.js';
 
@@ -225,6 +225,18 @@ makeCrud('brackets',       'id', ['id','category','code','name','unit','price_pe
 makeCrud('door_types',     'id', ['id','code','name','description','default_width','default_height','reinforcement_factor','required_components','default_opening']);
 makeCrud('shape_types',    'id', ['id','code','name','description','glass_factor','bend_fee','has_bent_profile','params_schema']);
 makeCrud('glass_attributes','id', ['id','code','name','description','multiplier','surcharge_per_m2','per_pane','notes']);
+makeCrud('construction_types','id', ['id','code','name','description','default_grid_w','default_grid_h','has_stoyka_rigel','has_3d_planes','glass_factor','profile_factor','needs_anchoring','notes']);
+makeCrud('facade_profiles','id', ['id','construction_id','category','vendor','name','code','width_mm','unit','price','notes']);
+
+// ── Phase 30-33: Facade calculator (curtain wall / SG / spider / winter garden / glass roof)
+api.post('/facade/calc', (req, res) => {
+  try {
+    const result = calcFacade(req.body);
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
 
 // ── calc scope categories (profile / hardware / glazing / …) ───────────
 api.get('/calc/categories', (_req, res) => {

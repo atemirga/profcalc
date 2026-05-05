@@ -349,6 +349,36 @@ CREATE TABLE IF NOT EXISTS door_types (
   default_opening TEXT NOT NULL DEFAULT 'ДВЕРЬ-ПП'
 );
 
+-- ── PHASE 30-33: facade construction types — multi-panel structures (curtain wall, structural glazing, winter garden, glass roof)
+CREATE TABLE IF NOT EXISTS construction_types (
+  id TEXT PRIMARY KEY,
+  code TEXT NOT NULL,                    -- 'window' | 'curtain_wall' | 'structural_glazing' | 'winter_garden' | 'glass_roof' | 'spider'
+  name TEXT NOT NULL,
+  description TEXT,
+  default_grid_w INTEGER NOT NULL DEFAULT 3,    -- ширина сетки секций по умолчанию (для фасадов)
+  default_grid_h INTEGER NOT NULL DEFAULT 4,
+  has_stoyka_rigel INTEGER NOT NULL DEFAULT 0,  -- 1 для curtain_wall (стойки + ригели)
+  has_3d_planes INTEGER NOT NULL DEFAULT 0,     -- 1 для winter_garden / glass_roof (3D)
+  glass_factor REAL NOT NULL DEFAULT 1.0,        -- наценка на стеклопакет
+  profile_factor REAL NOT NULL DEFAULT 1.0,      -- наценка на профиль
+  needs_anchoring INTEGER NOT NULL DEFAULT 0,    -- 1 если нужны спец. анкера (spider)
+  notes TEXT
+);
+
+-- ── PHASE 30-33: facade-specific profiles (стойки/ригели/спайдер-узлы)
+CREATE TABLE IF NOT EXISTS facade_profiles (
+  id TEXT PRIMARY KEY,
+  construction_id TEXT,                  -- FK to construction_types.id (NULL = general)
+  category TEXT NOT NULL,                -- 'stoyka' | 'rigel' | 'spider' | 'roof_rafter' | 'roof_purlin'
+  vendor TEXT NOT NULL,                  -- Schueco / Alutech / Reynaers
+  name TEXT NOT NULL,
+  code TEXT NOT NULL,
+  width_mm INTEGER,
+  unit TEXT NOT NULL DEFAULT 'м',
+  price INTEGER NOT NULL,
+  notes TEXT
+);
+
 -- ── PHASE 19: Glass attributes — toughened/laminated/tinted/coated extras
 CREATE TABLE IF NOT EXISTS glass_attributes (
   id TEXT PRIMARY KEY,
@@ -917,6 +947,63 @@ try {
   db.prepare(`DELETE FROM handles WHERE id IN ('hnd-antipanic','hnd-apecs-knob')`).run();
   db.prepare(`DELETE FROM door_types WHERE id IN ('dt-firedoor','dt-antipanic')`).run();
 } catch {}
+
+// ── Phase 30-33 seeds: construction types + facade profiles
+if (isEmpty('construction_types')) {
+  const ins = db.prepare(`INSERT INTO construction_types (id,code,name,description,default_grid_w,default_grid_h,has_stoyka_rigel,has_3d_planes,glass_factor,profile_factor,needs_anchoring,notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const seeds = [
+    ['ct-window',         'window',             'Окно / дверь (стандарт)',
+      'Стандартная одиночная конструкция (окно или дверь).',
+      1, 1, 0, 0, 1.0, 1.0, 0, null],
+    ['ct-curtain-wall',   'curtain_wall',       'Стоечно-ригельный фасад',
+      'Многоэтажный фасад из вертикальных стоек и горизонтальных ригелей. Большие секции, обычно тёплый алюминий Schueco FW 50/60.',
+      4, 6, 1, 0, 1.1, 1.3, 1, 'Schueco FW 50/60, Reynaers CW 50, Alutech F50'],
+    ['ct-structural',     'structural_glazing', 'Структурное остекление (SG)',
+      'Стекло крепится силиконом к подконструкции — без видимых импостов снаружи. Schueco FW 50 SG.',
+      3, 4, 1, 0, 1.4, 1.5, 1, 'структурный силикон DC 993, наценка стекла +40%'],
+    ['ct-spider',         'spider',             'Спайдер-фасад',
+      'Точечное крепление стекла на пауках через крестообразные кронштейны. Премиум-фасад.',
+      3, 4, 0, 0, 1.6, 1.0, 1, 'Spider-фитинги Schueco SK 60'],
+    ['ct-winter-garden',  'winter_garden',      'Зимний сад',
+      'Стены + наклонная или скатная крыша остеклённая. Многоплоскостная конструкция.',
+      4, 3, 1, 1, 1.2, 1.4, 0, 'Schueco CMC 50, Alutech AluFlex'],
+    ['ct-glass-roof',     'glass_roof',         'Светопрозрачная кровля',
+      'Стеклянная крыша на стропилах + ригелях. Учёт снеговой нагрузки.',
+      3, 2, 1, 1, 1.3, 1.4, 0, 'Schueco AOC 50/60, нагрузка 200 кг/м²'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('facade_profiles')) {
+  const ins = db.prepare(`INSERT INTO facade_profiles (id,construction_id,category,vendor,name,code,width_mm,unit,price,notes) VALUES (?,?,?,?,?,?,?,?,?,?)`);
+  const seeds = [
+    // Стоечно-ригельные системы (curtain wall)
+    ['fp-fw50-stoyka',    'ct-curtain-wall', 'stoyka', 'Schueco', 'FW 50 стойка',           'FW50-MAIN', 50, 'м', 18500, 'Алюминий тёплый'],
+    ['fp-fw50-rigel',     'ct-curtain-wall', 'rigel',  'Schueco', 'FW 50 ригель',            'FW50-CROS', 50, 'м', 14200, ''],
+    ['fp-fw60-stoyka',    'ct-curtain-wall', 'stoyka', 'Schueco', 'FW 60 стойка',           'FW60-MAIN', 60, 'м', 22800, ''],
+    ['fp-fw60-rigel',     'ct-curtain-wall', 'rigel',  'Schueco', 'FW 60 ригель',            'FW60-CROS', 60, 'м', 17600, ''],
+    ['fp-reynaers-cw50-st','ct-curtain-wall','stoyka', 'Reynaers','CW 50 стойка',           'CW50-S',    50, 'м', 16800, ''],
+    ['fp-reynaers-cw50-rg','ct-curtain-wall','rigel',  'Reynaers','CW 50 ригель',            'CW50-R',    50, 'м', 13200, ''],
+    ['fp-alutech-f50-st', 'ct-curtain-wall', 'stoyka', 'Alutech', 'F50 стойка',              'F50-S',     50, 'м', 11800, 'Бюджет'],
+    ['fp-alutech-f50-rg', 'ct-curtain-wall', 'rigel',  'Alutech', 'F50 ригель',              'F50-R',     50, 'м', 9400,  ''],
+    // Структурное остекление
+    ['fp-fw50-sg-st',     'ct-structural',   'stoyka', 'Schueco', 'FW 50 SG стойка',         'FW50SG-S',  50, 'м', 21600, 'Под структурный силикон'],
+    ['fp-fw50-sg-rg',     'ct-structural',   'rigel',  'Schueco', 'FW 50 SG ригель',         'FW50SG-R',  50, 'м', 16800, ''],
+    ['fp-sg-silicone',    'ct-structural',   'spider', 'Dow',     'Силикон Dow Corning 993', 'DC993',     null, 'м.п.', 4800, 'Структурный'],
+    // Spider-фасад (точечное крепление)
+    ['fp-spider-4arm',    'ct-spider',       'spider', 'Schueco', 'Spider-узел 4-лапа SK 60','SK60-4',    null, 'шт', 28000, '4 точки'],
+    ['fp-spider-2arm',    'ct-spider',       'spider', 'Schueco', 'Spider-узел 2-лапа',      'SK60-2',    null, 'шт', 18000, '2 точки'],
+    ['fp-spider-anchor',  'ct-spider',       'spider', 'Schueco', 'Анкер-кронштейн',         'SK60-AN',   null, 'шт', 12000, 'К фасаду'],
+    // Зимний сад (winter garden)
+    ['fp-cmc50-rafter',   'ct-winter-garden','roof_rafter','Schueco','CMC 50 стропила',     'CMC50-RA',  50, 'м', 19400, 'Под наклоном'],
+    ['fp-cmc50-purlin',   'ct-winter-garden','roof_purlin','Schueco','CMC 50 ригель кровли', 'CMC50-PU',  50, 'м', 15800, ''],
+    // Светопрозрачная кровля (glass roof)
+    ['fp-aoc50-rafter',   'ct-glass-roof',   'roof_rafter','Schueco','AOC 50 стропила',     'AOC50-RA',  50, 'м', 24000, 'Усиленные под снег'],
+    ['fp-aoc50-purlin',   'ct-glass-roof',   'roof_purlin','Schueco','AOC 50 ригель',       'AOC50-PU',  50, 'м', 19200, ''],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
 
 // ── Phase 19 seeds: glass attributes ─────────────────────────────────
 if (isEmpty('glass_attributes')) {

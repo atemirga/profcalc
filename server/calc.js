@@ -1180,6 +1180,134 @@ export function buildCutList(items) {
   return out;
 }
 
+// ── Phase 30-33: Facade construction calculator (curtain wall, SG, spider, winter garden, glass roof)
+// Input: { constructionTypeId, gridW, gridH, panelW, panelH, glazingId, glassAttributes,
+//          stoykaProfileId, rigelProfileId, priceLevel, includeRoof? (for winter_garden), roofAngleDeg? }
+// Output: same shape as calcWindow — { lines, byCategory, subtotal, total, ... }
+export function calcFacade(input) {
+  const ct = db.prepare('SELECT * FROM construction_types WHERE id = ?').get(input.constructionTypeId);
+  if (!ct) throw new Error('construction type not found');
+  const gridW = Math.max(1, parseInt(input.gridW, 10) || ct.default_grid_w);
+  const gridH = Math.max(1, parseInt(input.gridH, 10) || ct.default_grid_h);
+  const panelW = parseFloat(input.panelW) || 1500;  // mm per panel
+  const panelH = parseFloat(input.panelH) || 1200;
+  const totalW = panelW * gridW;
+  const totalH = panelH * gridH;
+  const totalArea = (totalW * totalH) / 1e6;        // m²
+  const priceLevel = input.priceLevel || 'dealer';
+  const lines = [];
+
+  // ── Stoyki (vertical posts): gridW + 1 vertical posts, each totalH long
+  const stoykaCount = gridW + 1;
+  const stoykaLen = (totalH / 1000) * stoykaCount;
+  let stoykaProfile = input.stoykaProfileId
+    ? db.prepare('SELECT * FROM facade_profiles WHERE id = ?').get(input.stoykaProfileId)
+    : db.prepare("SELECT * FROM facade_profiles WHERE construction_id = ? AND category = 'stoyka' LIMIT 1").get(ct.id);
+  if (stoykaProfile) {
+    const unitPrice = Math.round(stoykaProfile.price * priceMultiplier(priceLevel) * Number(ct.profile_factor || 1.0));
+    lines.push({ category: 'profile', label: `${stoykaProfile.vendor} · ${stoykaProfile.name} (×${stoykaCount} стоек)`, qty: stoykaLen.toFixed(2) + ' м', qtyNum: +stoykaLen.toFixed(2), unit: 'м', article: stoykaProfile.code, unitPrice, price: Math.round(stoykaLen * unitPrice) });
+  }
+  // ── Rigels (horizontal beams): gridH + 1 horizontal rigels, each totalW long
+  const rigelCount = gridH + 1;
+  const rigelLen = (totalW / 1000) * rigelCount;
+  let rigelProfile = input.rigelProfileId
+    ? db.prepare('SELECT * FROM facade_profiles WHERE id = ?').get(input.rigelProfileId)
+    : db.prepare("SELECT * FROM facade_profiles WHERE construction_id = ? AND category = 'rigel' LIMIT 1").get(ct.id);
+  if (rigelProfile) {
+    const unitPrice = Math.round(rigelProfile.price * priceMultiplier(priceLevel) * Number(ct.profile_factor || 1.0));
+    lines.push({ category: 'profile', label: `${rigelProfile.vendor} · ${rigelProfile.name} (×${rigelCount} ригелей)`, qty: rigelLen.toFixed(2) + ' м', qtyNum: +rigelLen.toFixed(2), unit: 'м', article: rigelProfile.code, unitPrice, price: Math.round(rigelLen * unitPrice) });
+  }
+  // ── Glazing (each panel = panelW × panelH)
+  const glaz = input.glazingId ? db.prepare('SELECT * FROM glazing WHERE id = ?').get(input.glazingId) : null;
+  if (glaz) {
+    const glazArt = art(glazingArticle(glaz.formula));
+    // Apply glass_factor + attribute multipliers
+    let attrMul = 1.0, attrSurcharge = 0;
+    const attrLabels = [];
+    for (const aid of (input.glassAttributes || [])) {
+      const a = db.prepare('SELECT * FROM glass_attributes WHERE id = ?').get(aid);
+      if (a) { attrMul *= Number(a.multiplier) || 1.0; attrSurcharge += Number(a.surcharge_per_m2) || 0; attrLabels.push(a.name); }
+    }
+    const totalMul = Number(ct.glass_factor || 1.0) * attrMul;
+    const unitPrice = Math.round(glazArt[priceLevel] * totalMul + attrSurcharge);
+    const totalGlassArea = (panelW * panelH / 1e6) * gridW * gridH;
+    const ctTag = ct.glass_factor > 1 ? ` · ${ct.code} ×${ct.glass_factor}` : '';
+    const attrTag = attrLabels.length ? ` · ${attrLabels.join(' + ')}` : '';
+    lines.push({ category: 'glazing', label: `Стеклопакет ${glaz.formula}${ctTag}${attrTag} (${gridW * gridH} панелей по ${panelW}×${panelH} мм)`,
+      qty: totalGlassArea.toFixed(2) + ' м²', qtyNum: +totalGlassArea.toFixed(2), unit: 'м²', article: glazArt.article, unitPrice, price: Math.round(totalGlassArea * unitPrice) });
+  }
+  // ── Anchoring (для SG / spider — фитинги)
+  if (ct.needs_anchoring) {
+    if (ct.code === 'spider') {
+      // Spider-узлы — по 1 на каждый угол панели (4 на панель в углах + 2 на промежуточных пересечениях)
+      const spiderCount = (gridW + 1) * (gridH + 1);  // узловые точки
+      const spider = db.prepare("SELECT * FROM facade_profiles WHERE construction_id = 'ct-spider' AND code = 'SK60-4'").get();
+      if (spider) {
+        const unitPrice = Math.round(spider.price * priceMultiplier(priceLevel));
+        lines.push({ category: 'hardware', label: `${spider.vendor} · ${spider.name}`, qty: spiderCount + ' шт', qtyNum: spiderCount, unit: 'шт', article: spider.code, unitPrice, price: spiderCount * unitPrice });
+      }
+      // Анкеры
+      const anchor = db.prepare("SELECT * FROM facade_profiles WHERE construction_id = 'ct-spider' AND category = 'spider' AND code = 'SK60-AN'").get();
+      if (anchor) {
+        const anchorCount = spiderCount * 1;
+        const unitPrice = Math.round(anchor.price * priceMultiplier(priceLevel));
+        lines.push({ category: 'hardware', label: anchor.name, qty: anchorCount + ' шт', qtyNum: anchorCount, unit: 'шт', article: anchor.code, unitPrice, price: anchorCount * unitPrice });
+      }
+    } else if (ct.code === 'structural_glazing') {
+      // Структурный силикон по периметру каждой панели
+      const perim = 2 * (panelW + panelH) / 1000 * gridW * gridH;
+      const sil = db.prepare("SELECT * FROM facade_profiles WHERE code = 'DC993'").get();
+      if (sil) {
+        const unitPrice = Math.round(sil.price * priceMultiplier(priceLevel));
+        lines.push({ category: 'sealing', label: `${sil.vendor} · ${sil.name}`, qty: perim.toFixed(2) + ' м', qtyNum: +perim.toFixed(2), unit: 'м', article: sil.code, unitPrice, price: Math.round(perim * unitPrice) });
+      }
+    }
+  }
+  // ── Roof rafters/purlins (для winter_garden / glass_roof)
+  if (ct.has_3d_planes && input.includeRoof !== false) {
+    const angle = parseFloat(input.roofAngleDeg) || 30;
+    const roofWidth = parseFloat(input.roofWidth)  || totalW;
+    const roofDepth = parseFloat(input.roofDepth)  || 3000;  // длина крыши
+    const slopeLen = roofDepth / Math.cos(angle * Math.PI / 180); // наклонная длина в мм
+    const roofArea = (roofWidth * slopeLen) / 1e6;
+    const rafterCount = Math.ceil(roofWidth / 1500) + 1;
+    const rafterTotal = (slopeLen / 1000) * rafterCount;
+    const rafterProfile = db.prepare("SELECT * FROM facade_profiles WHERE construction_id = ? AND category = 'roof_rafter' LIMIT 1").get(ct.id);
+    if (rafterProfile) {
+      const unitPrice = Math.round(rafterProfile.price * priceMultiplier(priceLevel));
+      lines.push({ category: 'profile', label: `${rafterProfile.vendor} · ${rafterProfile.name} (×${rafterCount} стропил)`, qty: rafterTotal.toFixed(2) + ' м', qtyNum: +rafterTotal.toFixed(2), unit: 'м', article: rafterProfile.code, unitPrice, price: Math.round(rafterTotal * unitPrice) });
+    }
+    const purlinProfile = db.prepare("SELECT * FROM facade_profiles WHERE construction_id = ? AND category = 'roof_purlin' LIMIT 1").get(ct.id);
+    if (purlinProfile) {
+      const purlinLen = (roofWidth / 1000) * 2;
+      const unitPrice = Math.round(purlinProfile.price * priceMultiplier(priceLevel));
+      lines.push({ category: 'profile', label: `${purlinProfile.vendor} · ${purlinProfile.name} (верх+низ)`, qty: purlinLen.toFixed(2) + ' м', qtyNum: +purlinLen.toFixed(2), unit: 'м', article: purlinProfile.code, unitPrice, price: Math.round(purlinLen * unitPrice) });
+    }
+    // Roof glazing
+    if (glaz) {
+      const glazArt = art(glazingArticle(glaz.formula));
+      const unitPrice = Math.round(glazArt[priceLevel] * 1.4); // кровельное стекло закал.+триплекс
+      lines.push({ category: 'glazing', label: `Кровельное стекло ${glaz.formula} закалённое + триплекс (под ${angle}°)`,
+        qty: roofArea.toFixed(2) + ' м²', qtyNum: +roofArea.toFixed(2), unit: 'м²', article: glazArt.article + '-ROOF', unitPrice, price: Math.round(roofArea * unitPrice) });
+    }
+  }
+  // ── Sealing (universal)
+  const seal = db.prepare("SELECT * FROM seals WHERE code = 'CON 02'").get();
+  if (seal) {
+    const sealLen = (rigelLen + stoykaLen) * 2;
+    const unitPrice = Math.round(seal.price_per_m * priceMultiplier(priceLevel));
+    lines.push({ category: 'sealing', label: `Уплотнитель ${seal.code} · ${seal.name.replace(/^Уплотнитель\s*/, '')}`,
+      qty: sealLen.toFixed(2) + ' м', qtyNum: +sealLen.toFixed(2), unit: 'м', article: seal.id, unitPrice, price: Math.round(sealLen * unitPrice) });
+  }
+  // Subtotal
+  const subtotal = lines.reduce((s, l) => s + l.price, 0);
+  return {
+    constructionType: ct, gridW, gridH, panelW, panelH, totalW, totalH, totalArea,
+    lines, subtotal, total: subtotal,
+    byCategory: lines.reduce((acc, l) => { acc[l.category] = (acc[l.category] || 0) + l.price; return acc; }, {}),
+  };
+}
+
 export function compareManufacturers(input) {
   const { glazingId, installerId, priceLevel = 'dealer', extras } = input;
   const manus = db.prepare('SELECT * FROM manufacturers WHERE status = ?').all('active');
