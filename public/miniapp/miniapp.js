@@ -472,7 +472,10 @@
       body.appendChild(scopeCard());
 
       // Calculate + summary
-      body.appendChild(h('button', { class: 'btn btn-accent', onClick: calcAll }, 'Рассчитать проект'));
+      body.appendChild(h('div', { class: 'btn-row', style: 'margin-bottom:10px' }, [
+        h('button', { class: 'btn btn-accent', style: 'flex:2', onClick: calcAll }, 'Рассчитать проект'),
+        h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => go('ar'), title: 'Примерить через камеру' }, '🔍 AR'),
+      ]));
 
       if (state.lastResult) {
         const r = state.lastResult;
@@ -1500,6 +1503,11 @@
         ]));
       }
 
+      // ── AR-примерка
+      body.appendChild(h('button', {
+        class: 'btn btn-secondary', style: 'margin-bottom:10px',
+        onClick: () => go('ar'),
+      }, '🔍 Примерить через камеру (AR)'));
       body.appendChild(h('button', { class: 'btn btn-accent', onClick: () => { state.lastResult = null; go('project'); } }, 'Готово'));
 
       body.appendChild(tabBar());
@@ -1790,6 +1798,310 @@
     window._sheet = bg;
   }
   function closeSheet() { if (window._sheet) { window._sheet.remove(); window._sheet = null; } }
+
+  // ── AR PREVIEW (camera + overlay) ───────────────────────────────────
+  // Live camera feed + draggable/resizable SVG overlay of the selected window/door
+  // with chosen color/shape. User can pinch-zoom, two-finger rotate, snapshot.
+  screens.ar = async function () {
+    setBackButton(() => { stopAr(); go('project'); });
+    setMainButton(null);
+    if (!state.cache.shapeTypes) state.cache.shapeTypes = await api('/shape_types').catch(() => []);
+    if (!state.cache.colors) state.cache.colors = await api('/colors').catch(() => []);
+    if (!state.cache.systems) state.cache.systems = await api('/profile-systems').catch(() => []);
+
+    if (!state.project.items?.length) startNewProject();
+    let arIdx = state.activeIdx || 0;
+    let opacity = 0.78;
+
+    clear(root);
+    const screen = h('div', { class: 'ar-screen' });
+    const video = h('video', { class: 'ar-video', autoplay: '', playsinline: '', muted: '' });
+    screen.appendChild(video);
+    // Subtle 3×3 framing grid (rule of thirds)
+    screen.appendChild(h('div', { class: 'ar-grid-hint' }));
+    const overlayWrap = h('div', { class: 'ar-overlay' });
+    screen.appendChild(overlayWrap);
+
+    // ── Top bar (close + flip camera + opacity)
+    const closeBtn = h('button', { class: 'ar-btn-icon', onClick: () => { stopAr(); go('project'); }, html: '✕' });
+    const flipBtn = h('button', { class: 'ar-btn-icon', onClick: flipCam, html: '⟳' });
+    screen.appendChild(h('div', { class: 'ar-controls-top' }, [closeBtn, h('div', { class: 'ar-info-strong', style: 'color:#fff;align-self:center;text-shadow:0 1px 4px rgba(0,0,0,.7)' }, '🔍 Примерка'), flipBtn]));
+
+    // ── Bottom controls
+    const bot = h('div', { class: 'ar-controls-bot' });
+    // Item tabs (если в проекте несколько позиций)
+    if (state.project.items.length > 1) {
+      const tabs = h('div', { class: 'ar-item-tabs' });
+      state.project.items.forEach((it, i) => {
+        tabs.appendChild(h('button', {
+          class: 'ar-item-tab' + (i === arIdx ? ' active' : ''),
+          onClick: () => { arIdx = i; redraw(); },
+        }, it.name || `Поз ${i + 1}`));
+      });
+      bot.appendChild(tabs);
+    }
+    // Info line
+    const infoEl = h('div', { class: 'ar-info' });
+    bot.appendChild(infoEl);
+    // Color picker (live change)
+    const colorRow = h('div', { class: 'ar-color-row' });
+    state.cache.colors.forEach(c => {
+      const dot = h('button', {
+        class: 'ar-color-dot' + (c.id === state.project.items[arIdx].colorId ? ' active' : ''),
+        title: c.ral,
+        style: 'background:' + (c.hex || '#ccc'),
+        onClick: () => { state.project.items[arIdx].colorId = c.id; redraw(); },
+      });
+      colorRow.appendChild(dot);
+    });
+    bot.appendChild(colorRow);
+    // Opacity slider
+    const opSlider = h('input', { type: 'range', min: 30, max: 100, value: Math.round(opacity * 100) });
+    opSlider.addEventListener('input', () => { opacity = opSlider.value / 100; overlaySvg && (overlaySvg.style.opacity = String(opacity)); });
+    bot.appendChild(h('div', { class: 'ar-opacity-row' }, [
+      h('span', {}, '☼'),
+      opSlider,
+      h('span', {}, '◉'),
+    ]));
+    // Shutter
+    bot.appendChild(h('button', { class: 'ar-shutter', onClick: snapshot, title: 'Сделать снимок' }));
+    bot.appendChild(h('div', { class: 'ar-info', style: 'margin-top:8px;font-size:11px;opacity:.7' },
+      'Двигай — палец, масштаб — двумя пальцами, поворот — двумя пальцами'));
+    screen.appendChild(bot);
+
+    document.body.appendChild(screen);
+    state._arScreen = screen;
+
+    // ── Camera setup
+    let stream = null;
+    let useFront = false;
+    async function startCam() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: useFront ? 'user' : 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+          audio: false,
+        });
+        video.srcObject = stream;
+      } catch (e) {
+        showToast('Камера недоступна: ' + (e.message || e.name), 4000);
+        // Fallback: show a placeholder background
+        video.style.background = 'linear-gradient(135deg, #2a3a4a 0%, #1a1a2a 100%)';
+      }
+    }
+    function stopCam() {
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    }
+    function flipCam() { useFront = !useFront; stopCam(); startCam(); }
+    function stopAr() {
+      stopCam();
+      window.removeEventListener('resize', updateInfo);
+      if (state._arScreen) { state._arScreen.remove(); state._arScreen = null; }
+    }
+    state._arStop = stopAr;
+    startCam();
+
+    // ── Overlay SVG (the window/door schematic with color)
+    let overlaySvg = null;
+    function redraw() {
+      const it = state.project.items[arIdx];
+      // Update item tabs active state
+      screen.querySelectorAll('.ar-item-tab').forEach((el, i) => el.classList.toggle('active', i === arIdx));
+      // Update color dots active state
+      screen.querySelectorAll('.ar-color-dot').forEach((el, i) => {
+        const c = state.cache.colors[i];
+        el.classList.toggle('active', c?.id === it.colorId);
+      });
+      // Recompute info
+      updateInfo();
+      // Build SVG
+      clear(overlayWrap);
+      const sysObj = state.cache.systems.find(s => s.id === it.systemId);
+      const colorObj = state.cache.colors.find(c => c.id === it.colorId);
+      const colorHex = colorObj?.hex || '#ffffff';
+      const aspectRatio = (it.layout?.width || 1500) / (it.layout?.height || 1400);
+      // Initial overlay size: ~60% of viewport's smaller dim
+      const vh = window.innerHeight, vw = window.innerWidth;
+      const baseDim = Math.min(vw, vh) * 0.6;
+      const overlayW = aspectRatio >= 1 ? baseDim : baseDim * aspectRatio;
+      const overlayH = aspectRatio >= 1 ? baseDim / aspectRatio : baseDim;
+      overlaySvg = window.WindowSchema({
+        w: overlayW, h: overlayH, layout: it.layout, showDims: false,
+        frameColor: colorHex,
+      });
+      // Override frame fill color via post-processing (WindowSchema uses fixed colors)
+      try {
+        // Recolor frame rects (the dark "5a5a5a"/"3a3a3a" that represent profile)
+        overlaySvg.querySelectorAll('rect').forEach(r => {
+          const f = r.getAttribute('fill') || '';
+          if (f === '#5a5a5a' || f === '#3a3a3a') r.setAttribute('fill', colorHex);
+        });
+      } catch {}
+      overlaySvg.style.opacity = String(opacity);
+      overlaySvg.style.filter = 'drop-shadow(0 4px 20px rgba(0,0,0,.6))';
+      overlayWrap.appendChild(overlaySvg);
+      // Reset transform on item change
+      ovX = 0; ovY = 0; ovScale = 1; ovRot = 0;
+      applyTransform();
+    }
+    function updateInfo() {
+      const it = state.project.items[arIdx];
+      const sysObj = state.cache.systems.find(s => s.id === it.systemId);
+      const colorObj = state.cache.colors.find(c => c.id === it.colorId);
+      clear(infoEl);
+      infoEl.appendChild(h('div', { class: 'ar-info-strong' }, it.name || 'Окно'));
+      infoEl.appendChild(h('div', {}, `${it.layout?.width || '?'} × ${it.layout?.height || '?'} мм · ${sysObj?.name || '—'} · ${colorObj?.ral || colorObj?.name || '—'}`));
+    }
+
+    // ── Touch interactions: drag, pinch-zoom, two-finger rotate
+    let ovX = 0, ovY = 0, ovScale = 1, ovRot = 0;
+    let startTouches = null;
+    let startState = null;
+    function applyTransform() {
+      overlayWrap.style.transform = `translate(calc(-50% + ${ovX}px), calc(-50% + ${ovY}px)) rotate(${ovRot}deg) scale(${ovScale})`;
+    }
+    function dist(a, b) { return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+    function angle(a, b) { return Math.atan2(b.clientY - a.clientY, b.clientX - a.clientX) * 180 / Math.PI; }
+    overlayWrap.style.pointerEvents = 'auto';
+    screen.addEventListener('touchstart', (e) => {
+      if (e.target.closest('.ar-controls-top, .ar-controls-bot')) return;
+      e.preventDefault();
+      startTouches = [...e.touches];
+      startState = { x: ovX, y: ovY, scale: ovScale, rot: ovRot,
+        dist: startTouches.length > 1 ? dist(startTouches[0], startTouches[1]) : 0,
+        angle: startTouches.length > 1 ? angle(startTouches[0], startTouches[1]) : 0 };
+    }, { passive: false });
+    screen.addEventListener('touchmove', (e) => {
+      if (e.target.closest('.ar-controls-top, .ar-controls-bot')) return;
+      if (!startTouches) return;
+      e.preventDefault();
+      const t = [...e.touches];
+      if (t.length === 1 && startTouches.length === 1) {
+        ovX = startState.x + (t[0].clientX - startTouches[0].clientX);
+        ovY = startState.y + (t[0].clientY - startTouches[0].clientY);
+      } else if (t.length === 2 && startTouches.length === 2) {
+        const d = dist(t[0], t[1]);
+        const a = angle(t[0], t[1]);
+        ovScale = Math.max(0.2, Math.min(5, startState.scale * (d / startState.dist)));
+        ovRot = startState.rot + (a - startState.angle);
+        // also pan with midpoint
+        const midNow = { x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 };
+        const midStart = { x: (startTouches[0].clientX + startTouches[1].clientX) / 2, y: (startTouches[0].clientY + startTouches[1].clientY) / 2 };
+        ovX = startState.x + (midNow.x - midStart.x);
+        ovY = startState.y + (midNow.y - midStart.y);
+      }
+      applyTransform();
+    }, { passive: false });
+    screen.addEventListener('touchend', () => { startTouches = null; });
+    // Mouse fallback (для desktop testing)
+    let mouseDown = false; let mouseStart = { x: 0, y: 0 };
+    screen.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.ar-controls-top, .ar-controls-bot')) return;
+      mouseDown = true; mouseStart = { x: e.clientX - ovX, y: e.clientY - ovY };
+    });
+    screen.addEventListener('mousemove', (e) => {
+      if (!mouseDown) return;
+      ovX = e.clientX - mouseStart.x; ovY = e.clientY - mouseStart.y;
+      applyTransform();
+    });
+    screen.addEventListener('mouseup', () => { mouseDown = false; });
+    screen.addEventListener('wheel', (e) => {
+      if (e.target.closest('.ar-controls-top, .ar-controls-bot')) return;
+      e.preventDefault();
+      ovScale = Math.max(0.2, Math.min(5, ovScale * (e.deltaY < 0 ? 1.1 : 0.9)));
+      applyTransform();
+    }, { passive: false });
+
+    window.addEventListener('resize', updateInfo);
+    redraw();
+
+    // ── Snapshot: composite video frame + overlay → PNG, share
+    function snapshot() {
+      try {
+        const W = video.videoWidth || 1280;
+        const H = video.videoHeight || 720;
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        // Mirror front camera horizontally (to match selfie expectation)
+        if (useFront) { ctx.translate(W, 0); ctx.scale(-1, 1); }
+        ctx.drawImage(video, 0, 0, W, H);
+        if (useFront) { ctx.setTransform(1, 0, 0, 1, 0, 0); }
+        // Composite SVG overlay
+        if (overlaySvg) {
+          const svgStr = new XMLSerializer().serializeToString(overlaySvg);
+          const blob = new Blob([svgStr], { type: 'image/svg+xml' });
+          const img = new Image();
+          img.onload = () => {
+            // Replicate CSS transform on canvas
+            const screenW = window.innerWidth, screenH = window.innerHeight;
+            const scaleX = W / screenW, scaleY = H / screenH;
+            ctx.save();
+            ctx.translate(W / 2 + ovX * scaleX, H / 2 + ovY * scaleY);
+            ctx.rotate(ovRot * Math.PI / 180);
+            ctx.scale(ovScale * scaleX, ovScale * scaleY);
+            ctx.globalAlpha = opacity;
+            ctx.drawImage(img, -img.width / 2, -img.height / 2);
+            ctx.restore();
+            URL.revokeObjectURL(img.src);
+            canvas.toBlob((blobOut) => {
+              const url = URL.createObjectURL(blobOut);
+              showSnapshotPreview(url, blobOut);
+            }, 'image/png');
+          };
+          img.src = URL.createObjectURL(blob);
+        } else {
+          canvas.toBlob((blobOut) => {
+            const url = URL.createObjectURL(blobOut);
+            showSnapshotPreview(url, blobOut);
+          }, 'image/png');
+        }
+      } catch (e) {
+        showToast('Ошибка снимка: ' + e.message);
+      }
+    }
+    function showSnapshotPreview(url, blob) {
+      const overlay = h('div', { style: 'position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:99999;display:flex;flex-direction:column' });
+      overlay.appendChild(h('img', { src: url, style: 'flex:1;width:100%;height:auto;object-fit:contain;min-height:0' }));
+      overlay.appendChild(h('div', { style: 'padding:14px 12px max(14px, env(safe-area-inset-bottom));display:flex;gap:10px' }, [
+        h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => overlay.remove() }, 'Ещё снимок'),
+        h('button', { class: 'btn btn-accent', style: 'flex:1', onClick: () => {
+          // Share via Telegram / system share
+          const it = state.project.items[arIdx];
+          const colorObj = state.cache.colors.find(c => c.id === it.colorId);
+          const caption = `🪟 ${it.name || 'Окно'} · ${it.layout?.width || ''}×${it.layout?.height || ''}мм · ${colorObj?.ral || ''}`;
+          if (navigator.share) {
+            const file = new File([blob], 'profcalc-ar.png', { type: 'image/png' });
+            navigator.share({ files: [file], text: caption }).catch(() => downloadFallback());
+          } else if (tg?.shareMessage) {
+            // Telegram WebApp share — нет прямой поддержки image, fallback to download
+            downloadFallback();
+          } else {
+            downloadFallback();
+          }
+          function downloadFallback() {
+            const a = document.createElement('a');
+            a.href = url; a.download = 'profcalc-ar-' + Date.now() + '.png';
+            document.body.appendChild(a); a.click(); a.remove();
+            showToast('Снимок сохранён');
+          }
+        } }, '💾 Сохранить'),
+      ]));
+      document.body.appendChild(overlay);
+    }
+    function showToast(msg, ms = 2000) {
+      const t = h('div', { class: 'ar-toast' }, msg);
+      screen.appendChild(t);
+      setTimeout(() => t.remove(), ms);
+    }
+  };
+
+  // Stop AR camera when navigating away from the screen
+  window.addEventListener('hashchange', () => {
+    if (state._arStop && currentRoute() !== 'ar') {
+      try { state._arStop(); } catch {}
+      state._arStop = null;
+    }
+  });
 
   // ── KP (commercial offer for project) ─────────────────────────────────
   screens.kp = async function () {

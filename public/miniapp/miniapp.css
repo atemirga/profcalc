@@ -322,3 +322,32 @@ a { color: var(--accent); text-decoration: none; }
 .role-pills { display: flex; gap: 6px; background: #f0ece4; padding: 4px; border-radius: 10px; margin-bottom: 16px; }
 .role-pills button { flex: 1; padding: 9px; border: none; border-radius: 7px; font-size: 12.5px; font-weight: 600; cursor: pointer; background: transparent; color: var(--text); }
 .role-pills button.active { background: var(--text); color: #fff; }
+
+/* ── AR preview (camera + overlay) ────────────────── */
+.ar-screen { position: fixed; inset: 0; background: #000; z-index: 9999; overflow: hidden; touch-action: none; -webkit-user-select: none; user-select: none; }
+.ar-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #111; }
+.ar-overlay { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); pointer-events: none; transform-origin: center; }
+.ar-controls-top { position: absolute; top: 0; left: 0; right: 0; padding: max(12px, env(safe-area-inset-top)) 12px 8px; display: flex; justify-content: space-between; gap: 8px; background: linear-gradient(to bottom, rgba(0,0,0,.7), transparent); z-index: 2; }
+.ar-controls-bot { position: absolute; bottom: 0; left: 0; right: 0; padding: 14px 12px max(14px, env(safe-area-inset-bottom)); background: linear-gradient(to top, rgba(0,0,0,.78), transparent); z-index: 2; }
+.ar-btn-icon { width: 44px; height: 44px; border-radius: 50%; background: rgba(255,255,255,.18); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,.35); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 18px; }
+.ar-btn-icon:active { background: rgba(255,255,255,.30); }
+.ar-shutter { width: 70px; height: 70px; border-radius: 50%; background: #fff; border: 4px solid rgba(255,255,255,.4); cursor: pointer; box-shadow: 0 0 0 2px #fff inset; margin: 0 auto; display: block; }
+.ar-shutter:active { background: var(--accent); }
+.ar-info { color: #fff; text-align: center; font-size: 13px; margin-bottom: 12px; opacity: .9; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+.ar-info-strong { font-weight: 600; font-size: 14px; }
+.ar-color-row { display: flex; gap: 6px; justify-content: center; margin-bottom: 10px; flex-wrap: wrap; }
+.ar-color-dot { width: 30px; height: 30px; border-radius: 50%; border: 2px solid rgba(255,255,255,.5); cursor: pointer; padding: 0; }
+.ar-color-dot.active { border-color: #fff; box-shadow: 0 0 0 2px var(--accent); }
+.ar-opacity-row { display: flex; align-items: center; gap: 10px; padding: 0 18px; margin-bottom: 12px; }
+.ar-opacity-row span { color: #fff; font-size: 11px; opacity: .8; min-width: 24px; }
+.ar-opacity-row input[type=range] { flex: 1; accent-color: var(--accent); }
+.ar-item-tabs { display: flex; gap: 6px; overflow-x: auto; padding: 0 12px 10px; -webkit-overflow-scrolling: touch; }
+.ar-item-tabs::-webkit-scrollbar { display: none; }
+.ar-item-tab { flex-shrink: 0; padding: 6px 14px; border-radius: 14px; background: rgba(255,255,255,.18); color: #fff; font-size: 12px; font-weight: 500; border: 1px solid rgba(255,255,255,.3); cursor: pointer; white-space: nowrap; }
+.ar-item-tab.active { background: var(--accent); border-color: var(--accent); }
+.ar-toast { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.85); color: #fff; padding: 14px 22px; border-radius: 12px; z-index: 10; font-size: 14px; }
+.ar-overlay-frame { stroke: var(--accent); stroke-width: 2; fill: none; opacity: .5; }
+.ar-grid-hint { position: absolute; inset: 0; pointer-events: none; opacity: .25; }
+.ar-grid-hint::before, .ar-grid-hint::after { content: ''; position: absolute; background: #fff; }
+.ar-grid-hint::before { top: 33%; bottom: 33%; left: 33%; width: 1px; }
+.ar-grid-hint::after { left: 33%; right: 33%; top: 33%; height: 1px; }
