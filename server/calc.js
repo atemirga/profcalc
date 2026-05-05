@@ -777,6 +777,131 @@ function summarizeByCategory(lines) {
   return out;
 }
 
+// ── Phase 8: Cut list (раскрой) — per-bar list for the factory saw.
+// For each item/position, walks the layout and emits one entry per profile
+// bar that needs to be cut, with length (mm), start/end miter angles, role,
+// color, profile code. Frame bars are 45°/45° mitered; impost bars are
+// 90°/90° (butted to the frame); sash bars are 45°/45°; bead bars are 45°.
+//
+// Length conventions (typical industrial PVC fabrication):
+//   frame top/bottom = full width; frame left/right = full height
+//   sash bars = sash perim sides (4 bars per opening)
+//   mullion bars = full width (horizontal) or row height (vertical)
+//   bead bars = 4 per glass (sash inset glass area)
+//
+// Returns: [{ posIdx, posLabel, role, profileCode, profileName, lengthMm,
+//             startAngle, endAngle, color, qty, systemId }]
+export function buildCutList(items) {
+  const out = [];
+  function partLookup(systemId, kind) {
+    return db.prepare("SELECT * FROM profile_parts WHERE system_id = ? AND kind = ? LIMIT 1").get(systemId, kind);
+  }
+  function colorRal(colorId) {
+    if (!colorId) return null;
+    const c = db.prepare('SELECT ral, name FROM colors WHERE id = ?').get(colorId);
+    return c ? c.ral : null;
+  }
+  items.forEach((it, idx) => {
+    const layout = it.layout || { width: 1500, height: 1400, rows: [] };
+    const W = layout.width;
+    const H = layout.height;
+    const itemQty = it.qty || 1;
+    const posLabel = `Поз:${String(idx + 1).padStart(3, '0')}`;
+    const color = colorRal(it.colorId);
+    const sys = it.systemId || 'rehau-delight-70';
+
+    const frame = partLookup(sys, 'frame');
+    const sash  = partLookup(sys, 'sash');
+    const mull  = partLookup(sys, 'mullion');
+    const bead  = partLookup(sys, 'bead');
+    const doorSash = partLookup(sys, 'door_sash');
+
+    function emit(role, profile, lengthMm, qty, startAng = 45, endAng = 45) {
+      if (!profile || lengthMm <= 0) return;
+      out.push({
+        posIdx: idx + 1, posLabel, role,
+        profileCode: profile.code,
+        profileName: profile.name,
+        lengthMm: Math.round(lengthMm),
+        startAngle: startAng, endAngle: endAng,
+        color, qty: qty * itemQty, systemId: sys,
+      });
+    }
+
+    // ── 1. Frame: 4 bars (top + bottom + left + right), 45°/45° miter
+    if (frame) {
+      emit('Рама верх',  frame, W, 1, 45, 45);
+      emit('Рама низ',   frame, W, 1, 45, 45);
+      emit('Рама лев.',  frame, H, 1, 45, 45);
+      emit('Рама прав.', frame, H, 1, 45, 45);
+    }
+
+    // Compute row heights and column widths in mm
+    function normalize(arr, total, key) {
+      const fixedSum = arr.reduce((s, x) => s + (x[key] || 0), 0);
+      const ratioItems = arr.filter(x => !x[key]);
+      const remaining = Math.max(0, total - fixedSum);
+      const ratioSum = ratioItems.reduce((s, x) => s + (x.ratio ?? 1), 0) || 1;
+      return arr.map(x => x[key] ? x[key] : remaining * (x.ratio ?? 1) / ratioSum);
+    }
+    const rowHs = normalize(layout.rows || [], H, 'height_mm');
+
+    // ── 2. Horizontal mullions (between rows): 1 bar per inter-row gap, length = W, 90°/90°
+    for (let ri = 1; ri < layout.rows.length; ri++) {
+      emit('Импост гор.', mull, W, 1, 90, 90);
+    }
+
+    // ── 3. Per-row: vertical mullions, sash bars, bead bars
+    layout.rows.forEach((row, ri) => {
+      const rowH = rowHs[ri];
+      const colWs = normalize(row.sections || [], W, 'width_mm');
+      // vertical mullions between sections
+      for (let ci = 1; ci < row.sections.length; ci++) {
+        emit('Импост верт.', mull, rowH, 1, 90, 90);
+      }
+      // sash + glass per section
+      row.sections.forEach((sec, ci) => {
+        const sw = colWs[ci];
+        const code = sec.opening || 'FIX';
+        const isFix = code === 'FIX' || code.endsWith('-FIX');
+        const isDoor = typeof code === 'string' && code.startsWith('ДВЕРЬ-');
+        const sashFrameInset = 70; // 70 mm typical
+        if (!isFix) {
+          // 4 sash bars per opening (top+bottom = sw, left+right = rowH)
+          // Door uses door_sash profile if available
+          const sashProfile = (isDoor && doorSash) ? doorSash : sash;
+          emit('Створка верх ' + code,  sashProfile, sw,    1, 45, 45);
+          emit('Створка низ ' + code,   sashProfile, sw,    1, 45, 45);
+          emit('Створка лев. ' + code,  sashProfile, rowH,  1, 45, 45);
+          emit('Створка прав. ' + code, sashProfile, rowH,  1, 45, 45);
+          // Glass inset by sashFrameInset mm on each side
+          const glassW = sw   - 2 * sashFrameInset;
+          const glassH = rowH - 2 * sashFrameInset;
+          if (glassW > 0 && glassH > 0 && bead) {
+            emit('Штапик верх',  bead, glassW, 1, 45, 45);
+            emit('Штапик низ',   bead, glassW, 1, 45, 45);
+            emit('Штапик лев.',  bead, glassH, 1, 45, 45);
+            emit('Штапик прав.', bead, glassH, 1, 45, 45);
+          }
+        } else {
+          // Fixed glass — bead bars sized to the section minus 5mm tolerance per side
+          const glassW = sw   - 10;
+          const glassH = rowH - 10;
+          if (glassW > 0 && glassH > 0 && bead) {
+            emit('Штапик верх',  bead, glassW, 1, 45, 45);
+            emit('Штапик низ',   bead, glassW, 1, 45, 45);
+            emit('Штапик лев.',  bead, glassH, 1, 45, 45);
+            emit('Штапик прав.', bead, glassH, 1, 45, 45);
+          }
+        }
+      });
+    });
+  });
+  // Sort by profile code, then length descending — matches saw-cut optimization
+  out.sort((a, b) => a.profileCode.localeCompare(b.profileCode) || b.lengthMm - a.lengthMm);
+  return out;
+}
+
 export function compareManufacturers(input) {
   const { glazingId, installerId, priceLevel = 'dealer', extras } = input;
   const manus = db.prepare('SELECT * FROM manufacturers WHERE status = ?').all('active');

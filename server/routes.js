@@ -1,7 +1,7 @@
 // server/routes.js — REST API for admin + mini-app
 import express from 'express';
 import db, { logEvent } from './db.js';
-import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom } from './calc.js';
+import { calcWindow, compareManufacturers, calcProject, CATEGORIES, CATEGORY_LABELS, buildBom, buildCutList } from './calc.js';
 import { verifyInitData } from './telegram-auth.js';
 import { buildKpPdf, buildInvoicePdf } from './pdf.js';
 
@@ -608,6 +608,27 @@ api.get('/projects/:id/invoice.pdf', (req, res) => {
     console.error('Invoice PDF error:', e);
     if (!res.headersSent) res.status(500).json({ error: e.message });
   }
+});
+
+// ── Phase 8: Cut list (1D раскрой) for a saved project ─────────────────
+api.get('/projects/:id/cutlist', (req, res) => {
+  const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  const items = JSON.parse(row.items);
+  const list = buildCutList(items);
+  // Group by profile + color
+  const groups = {};
+  for (const ln of list) {
+    const k = ln.profileCode + '|' + (ln.color || '');
+    (groups[k] = groups[k] || { profileCode: ln.profileCode, profileName: ln.profileName, color: ln.color, bars: [], totalMm: 0 }).bars.push(ln);
+    groups[k].totalMm += ln.lengthMm * ln.qty;
+  }
+  res.json({
+    projectId: row.id, name: row.name,
+    bars: list, groups: Object.values(groups),
+    totalBars: list.length,
+    totalMm: list.reduce((s, b) => s + b.lengthMm * b.qty, 0),
+  });
 });
 
 // ── Phase 4: BOM (Logikal-style materials list) for a saved project ─────
