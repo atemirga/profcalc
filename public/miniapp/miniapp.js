@@ -1811,7 +1811,7 @@
 
     if (!state.project.items?.length) startNewProject();
     let arIdx = state.activeIdx || 0;
-    let opacity = 0.80;  // Phase AR-1: default 80% per user spec (glass extra-transparent below)
+    let glassOpacity = 0.20;  // Phase AR-2: glass = 80% transparent (only the glass, not the frame)
 
     clear(root);
     const screen = h('div', { class: 'ar-screen' });
@@ -1855,14 +1855,19 @@
       colorRow.appendChild(dot);
     });
     bot.appendChild(colorRow);
-    // Opacity slider
-    const opSlider = h('input', { type: 'range', min: 30, max: 100, value: Math.round(opacity * 100) });
-    opSlider.addEventListener('input', () => { opacity = opSlider.value / 100; overlaySvg && (overlaySvg.style.opacity = String(opacity)); });
+    // Glass transparency slider (frame stays fully opaque; only glass is see-through)
+    // Slider value = transparency %. 80% transparency (default) = 0.20 opacity.
+    const opSlider = h('input', { type: 'range', min: 0, max: 100, value: Math.round((1 - glassOpacity) * 100) });
+    opSlider.addEventListener('input', () => {
+      glassOpacity = 1 - (opSlider.value / 100);
+      applyGlassOpacity();
+    });
     bot.appendChild(h('div', { class: 'ar-opacity-row' }, [
-      h('span', {}, '☼'),
-      opSlider,
       h('span', {}, '◉'),
+      opSlider,
+      h('span', {}, '☐'),
     ]));
+    bot.appendChild(h('div', { class: 'ar-info', style: 'margin-top:-4px;font-size:10px;opacity:.6' }, '↑ прозрачность стекла'));
     // Shutter
     bot.appendChild(h('button', { class: 'ar-shutter', onClick: snapshot, title: 'Сделать снимок' }));
     bot.appendChild(h('div', { class: 'ar-info', style: 'margin-top:8px;font-size:11px;opacity:.7' },
@@ -1924,26 +1929,18 @@
       const baseDim = Math.min(vw, vh) * 0.6;
       const overlayW = aspectRatio >= 1 ? baseDim : baseDim * aspectRatio;
       const overlayH = aspectRatio >= 1 ? baseDim / aspectRatio : baseDim;
-      // Phase AR-1: pass colors directly to WindowSchema so frame/sash use the
-      // RAL color and glass becomes semi-transparent white (~20% opacity, the
-      // user sees through it to the real wall). Overall SVG ≈ 80% opacity.
+      // Phase AR-2: frame/sash — fully opaque RAL color (frame is solid, NOT transparent).
+      // Only the glass is semi-transparent so the user sees through to the real wall.
       overlaySvg = window.WindowSchema({
         w: overlayW, h: overlayH, layout: it.layout, showDims: false,
         frameColor: colorHex,
         sashColor: colorHex,
-        glassColor: 'rgba(255, 255, 255, 0.20)',  // semi-transparent white — see through to wall
+        glassColor: `rgba(255, 255, 255, ${glassOpacity})`,
       });
-      // Tweak the inner glass stroke (drawn separately by WindowSchema) so it
-      // doesn't show as a dark outline on top of the camera feed.
-      try {
-        overlaySvg.querySelectorAll('rect').forEach(r => {
-          if ((r.getAttribute('fill') || '').replace(/\s/g, '') === 'rgba(255,255,255,0.20)') {
-            r.setAttribute('stroke', 'rgba(255, 255, 255, 0.35)');
-          }
-        });
-      } catch {}
-      overlaySvg.style.opacity = String(opacity);
+      // The whole SVG stays fully opaque — frame should look real, not faded.
+      overlaySvg.style.opacity = '1';
       overlaySvg.style.filter = 'drop-shadow(0 4px 20px rgba(0,0,0,.6))';
+      applyGlassOpacity();
       overlayWrap.appendChild(overlaySvg);
       // Reset transform on item change
       ovX = 0; ovY = 0; ovScale = 1; ovRot = 0;
@@ -1956,6 +1953,21 @@
       clear(infoEl);
       infoEl.appendChild(h('div', { class: 'ar-info-strong' }, it.name || 'Окно'));
       infoEl.appendChild(h('div', {}, `${it.layout?.width || '?'} × ${it.layout?.height || '?'} мм · ${sysObj?.name || '—'} · ${colorObj?.ral || colorObj?.name || '—'}`));
+    }
+    // Phase AR-2: live update of glass opacity without re-rendering the SVG —
+    // walks rects, finds the ones with semi-transparent rgba fill (= glass)
+    // and updates their alpha to the current glassOpacity value.
+    function applyGlassOpacity() {
+      if (!overlaySvg) return;
+      try {
+        overlaySvg.querySelectorAll('rect').forEach(r => {
+          const f = (r.getAttribute('fill') || '').toLowerCase().replace(/\s/g, '');
+          if (f.startsWith('rgba(') && /,0?\.\d+\)$/.test(f)) {
+            r.setAttribute('fill', `rgba(255, 255, 255, ${glassOpacity})`);
+            r.setAttribute('stroke', `rgba(255, 255, 255, ${Math.min(1, glassOpacity + 0.15)})`);
+          }
+        });
+      } catch {}
     }
 
     // ── Touch interactions: drag, pinch-zoom, two-finger rotate
@@ -2045,7 +2057,7 @@
             ctx.translate(W / 2 + ovX * scaleX, H / 2 + ovY * scaleY);
             ctx.rotate(ovRot * Math.PI / 180);
             ctx.scale(ovScale * scaleX, ovScale * scaleY);
-            ctx.globalAlpha = opacity;
+            // Frame is fully opaque; per-rect glass alpha is already baked into the SVG.
             ctx.drawImage(img, -img.width / 2, -img.height / 2);
             ctx.restore();
             URL.revokeObjectURL(img.src);
