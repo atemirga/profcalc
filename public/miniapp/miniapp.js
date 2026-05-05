@@ -63,14 +63,20 @@
     layout: { width: 1500, height: 1400, rows: [{ sections: [{ opening: 'FIX' }, { opening: 'ПОП' }] }] },
     glazingId: 'g-4-10-4-10-4i',
     systemId: 'rehau-delight-70',
+    colorId: 'c-white',
+    hardwareKitId: 'hw-roto-nt',
+    handleId: 'hnd-hoppe-atlanta',
+    handleColorId: 'c-white',
     // installCost: { value, perM2 } — when set, overrides default INSTALL article price
-    extras: { sill: true, ebb: true, mesh: true, install: true, installCost: null },
+    extras: { sill: true, ebb: true, mesh: true, install: true, installCost: null,
+              sillId: 'sill-moeller-250', ebbId: 'ebb-zn-150', meshId: 'mesh-frame-std' },
     qty: 1,
   });
   const state = {
     me: null,
     notifUnread: 0,
-    cache: { glazing: null, systems: null, openings: null, manus: null },
+    cache: { glazing: null, systems: null, openings: null, manus: null,
+             colors: null, hwKits: null, handles: null, sills: null, ebbs: null, meshes: null },
     project: {
       id: null,
       name: '',
@@ -682,8 +688,22 @@
     if (!state.cache.glazing) state.cache.glazing = await api('/glazing');
     if (!state.cache.systems) state.cache.systems = await api('/profile-systems');
     if (!state.cache.openings) state.cache.openings = await api('/opening-types');
+    if (!state.cache.colors)  state.cache.colors  = await api('/colors').catch(() => []);
+    if (!state.cache.hwKits)  state.cache.hwKits  = await api('/hardware_kits').catch(() => []);
+    if (!state.cache.handles) state.cache.handles = await api('/handles').catch(() => []);
+    if (!state.cache.sills)   state.cache.sills   = await api('/sills').catch(() => []);
+    if (!state.cache.ebbs)    state.cache.ebbs    = await api('/ebbs').catch(() => []);
+    if (!state.cache.meshes)  state.cache.meshes  = await api('/meshes').catch(() => []);
 
     const item = state.project.items[state.activeIdx];
+    // backfill defaults for older items
+    if (!item.colorId)        item.colorId = 'c-white';
+    if (!item.hardwareKitId)  item.hardwareKitId = 'hw-roto-nt';
+    if (!item.handleId)       item.handleId = 'hnd-hoppe-atlanta';
+    if (!item.handleColorId)  item.handleColorId = item.colorId;
+    if (!item.extras.sillId)  item.extras.sillId = 'sill-moeller-250';
+    if (!item.extras.ebbId)   item.extras.ebbId = 'ebb-zn-150';
+    if (!item.extras.meshId)  item.extras.meshId = 'mesh-frame-std';
 
     function paint() {
       clear(root);
@@ -792,6 +812,70 @@
       });
       body.appendChild(glCard);
 
+      // ── Phase 1: Color of profile
+      body.appendChild(h('div', { class: 'section-label' }, 'Цвет профиля'));
+      const colorWrap = h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-wrap:wrap;gap:8px' });
+      state.cache.colors.forEach(c => {
+        const sel = c.id === item.colorId;
+        const swatch = h('button', {
+          onClick: () => { item.colorId = c.id; paint(); },
+          style: `display:flex;align-items:center;gap:8px;padding:6px 10px 6px 6px;border-radius:8px;border:1.5px solid ${sel ? 'var(--accent)' : 'var(--rule)'};background:${sel ? 'var(--accent-soft, #fbeede)' : '#fff'};cursor:pointer;font-size:12.5px;font-weight:${sel ? 600 : 500}`,
+        }, [
+          h('span', { style: `width:22px;height:22px;border-radius:4px;background:${c.hex || '#ccc'};border:1px solid rgba(0,0,0,.15);flex-shrink:0` }),
+          h('span', {}, [c.ral, c.surcharge_pct ? h('span', { style: 'color:var(--accent);font-family:var(--mono);font-size:10px;margin-left:4px' }, '+' + c.surcharge_pct + '%') : null]),
+        ]);
+        colorWrap.appendChild(swatch);
+      });
+      body.appendChild(colorWrap);
+
+      // ── Phase 1: Hardware kit
+      body.appendChild(h('div', { class: 'section-label' }, 'Фурнитура'));
+      const hwCard = h('div', { class: 'card list', style: 'margin-bottom:14px' });
+      const isDoor = (item.layout.rows || []).some(r => (r.sections || []).some(s => (s.opening || '').startsWith('ДВЕРЬ')));
+      const hasSliding = (item.layout.rows || []).some(r => (r.sections || []).some(s => (s.opening || '').startsWith('РАЗД')));
+      const hwFiltered = state.cache.hwKits.filter(k => isDoor ? true : (hasSliding ? true : k.kind === 'window'));
+      hwFiltered.forEach(k => {
+        const sel = k.id === item.hardwareKitId;
+        hwCard.appendChild(h('div', { class: 'glaz-row' + (sel ? ' sel' : ''), onClick: () => { item.hardwareKitId = k.id; paint(); } }, [
+          h('div', { class: 'radio' }),
+          h('div', { class: 'meta' }, [
+            h('div', { class: 'label' }, k.vendor + ' · ' + k.name),
+            h('div', { class: 'sub' }, ({ window: 'Оконная', door: 'Дверная', sliding: 'Раздвижная' })[k.kind] + (k.notes ? ' · ' + k.notes : '')),
+          ]),
+          h('div', { class: 'price' }, [fmtKZT(k.price_per_sash), h('span', { class: 'muted', style: 'font-size:10px;font-weight:500' }, '/створка')]),
+        ]));
+      });
+      body.appendChild(hwCard);
+
+      // ── Phase 1: Handle (model + color)
+      body.appendChild(h('div', { class: 'section-label' }, 'Ручка'));
+      const handleCard = h('div', { class: 'card list', style: 'margin-bottom:8px' });
+      const handlesFiltered = state.cache.handles.filter(hd => isDoor ? true : hd.kind === 'window');
+      handlesFiltered.forEach(hd => {
+        const sel = hd.id === item.handleId;
+        handleCard.appendChild(h('div', { class: 'glaz-row' + (sel ? ' sel' : ''), onClick: () => { item.handleId = hd.id; paint(); } }, [
+          h('div', { class: 'radio' }),
+          h('div', { class: 'meta' }, [
+            h('div', { class: 'label' }, hd.vendor + ' · ' + hd.name),
+            h('div', { class: 'sub' }, ({ window: 'Оконная', door: 'Дверная' })[hd.kind]),
+          ]),
+          h('div', { class: 'price' }, fmtKZT(hd.price)),
+        ]));
+      });
+      body.appendChild(handleCard);
+      // handle color picker
+      body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-wrap:wrap;gap:6px;align-items:center' }, [
+        h('div', { style: 'font-size:12px;color:var(--muted);margin-right:6px' }, 'Цвет ручки:'),
+        ...state.cache.colors.map(c => {
+          const sel = c.id === item.handleColorId;
+          return h('button', {
+            onClick: () => { item.handleColorId = c.id; paint(); },
+            title: c.ral,
+            style: `width:24px;height:24px;border-radius:50%;background:${c.hex || '#ccc'};border:${sel ? '2.5px solid var(--accent)' : '1.5px solid rgba(0,0,0,.15)'};cursor:pointer;padding:0`,
+          });
+        }),
+      ]));
+
       // Extras
       body.appendChild(h('div', { class: 'section-label' }, 'Дополнительно'));
       const extrasCard = h('div', { class: 'card list', style: 'margin-bottom:14px' });
@@ -805,6 +889,49 @@
         ]));
       });
       body.appendChild(extrasCard);
+
+      // ── Phase 1: Sill / Ebb / Mesh model selectors (if extra is enabled)
+      function modelPicker(titleStr, list, itemKey, fmt) {
+        if (!list.length) return null;
+        const card = h('div', { class: 'card list', style: 'margin-bottom:10px' });
+        list.forEach(rec => {
+          const sel = rec.id === item.extras[itemKey];
+          card.appendChild(h('div', { class: 'glaz-row' + (sel ? ' sel' : ''), onClick: () => { item.extras[itemKey] = rec.id; paint(); } }, [
+            h('div', { class: 'radio' }),
+            h('div', { class: 'meta' }, fmt(rec)),
+            h('div', { class: 'price' }, fmt.price ? fmt.price(rec) : ''),
+          ]));
+        });
+        return h('div', {}, [
+          h('div', { class: 'section-label', style: 'margin-top:6px' }, titleStr),
+          card,
+        ]);
+      }
+      if (item.extras.sill) {
+        const fmt = (s) => [
+          h('div', { class: 'label' }, s.vendor + ' ' + s.name + ' · ' + s.width_mm + ' мм'),
+          h('div', { class: 'sub' }, s.color || ''),
+        ];
+        fmt.price = (s) => [fmtKZT(s.price_per_m), h('span', { class: 'muted', style: 'font-size:10px;font-weight:500' }, '/м')];
+        body.appendChild(modelPicker('Модель подоконника', state.cache.sills, 'sillId', fmt));
+      }
+      if (item.extras.ebb) {
+        const fmt = (e) => [
+          h('div', { class: 'label' }, e.material + ' ' + e.width_mm + ' мм'),
+          h('div', { class: 'sub' }, e.color || ''),
+        ];
+        fmt.price = (e) => [fmtKZT(e.price_per_m), h('span', { class: 'muted', style: 'font-size:10px;font-weight:500' }, '/м')];
+        body.appendChild(modelPicker('Модель отлива', state.cache.ebbs, 'ebbId', fmt));
+      }
+      if (item.extras.mesh) {
+        const kindL = { frame: 'Рамочная', sliding: 'Раздвижная', pleated: 'Плиссе', antikoshka: 'Антикошка', roll: 'Рулонная' };
+        const fmt = (m) => [
+          h('div', { class: 'label' }, kindL[m.kind] + ' · ' + m.name),
+          h('div', { class: 'sub' }, m.color || ''),
+        ];
+        fmt.price = (m) => [fmtKZT(m.price_per_unit), h('span', { class: 'muted', style: 'font-size:10px;font-weight:500' }, '/' + m.unit)];
+        body.appendChild(modelPicker('Тип сетки', state.cache.meshes, 'meshId', fmt));
+      }
 
       // Install cost editor — visible only when install is enabled
       if (item.extras.install) {

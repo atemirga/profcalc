@@ -103,7 +103,11 @@ function legacyToLayout(sections, width, height) {
  * @param {string} input.manufacturerId
  * @param {string} [input.installerId]
  * @param {string} [input.priceLevel]  'base' | 'dealer' | 'retail'
- * @param {object} [input.extras]      { sill, ebb, mesh, install }
+ * @param {object} [input.extras]      { sill, ebb, mesh, install, sillId, ebbId, meshId }
+ * @param {string} [input.colorId]     — RAL color of the profile (surcharge applies)
+ * @param {string} [input.hardwareKitId] — window hardware kit
+ * @param {string} [input.handleId]    — window/door handle
+ * @param {string} [input.handleColorId]
  */
 export function calcWindow(input) {
   const {
@@ -111,6 +115,7 @@ export function calcWindow(input) {
     installerId, priceLevel = 'retail',
     extras = { sill: true, ebb: true, mesh: true, install: true },
     scope,
+    colorId, hardwareKitId, handleId, handleColorId,
   } = input;
   const scopeSet = normalizeScope(scope);
 
@@ -130,6 +135,10 @@ export function calcWindow(input) {
   if (!sys) throw new Error(`system ${systemId} not found`);
   const glaz = db.prepare('SELECT * FROM glazing WHERE id = ?').get(glazingId);
   if (!glaz) throw new Error(`glazing ${glazingId} not found`);
+
+  // Color surcharge (e.g. RAL 7024 = +25% to profile lines)
+  const color = colorId ? db.prepare('SELECT * FROM colors WHERE id = ?').get(colorId) : null;
+  const colorSurchargePct = color ? (color.surcharge_pct || 0) : 0;
 
   const w_m = width / 1000;
   const h_m = height / 1000;
@@ -172,15 +181,16 @@ export function calcWindow(input) {
   });
 
   const allLines = [];
+  const colorTag = color ? ` · ${color.ral}` : '';
 
   // Frame
   const frameArt = art(profileArticle(sys.name, 'frame'));
-  allLines.push(tag(line(`Профиль ПВХ ${sys.name} · рама`, framePerim, 'м', frameArt, priceLevel), 'profile'));
+  allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · рама${colorTag}`, framePerim, 'м', frameArt, priceLevel), colorSurchargePct), 'profile'));
 
   // Sash
   if (sashPerimTotal > 0) {
     const sashArt = art(profileArticle(sys.name, 'sash'));
-    allLines.push(tag(line(`Профиль ПВХ ${sys.name} · створка (×${openCount})`, sashPerimTotal, 'м', sashArt, priceLevel), 'profile'));
+    allLines.push(tag(applySurcharge(line(`Профиль ПВХ ${sys.name} · створка (×${openCount})${colorTag}`, sashPerimTotal, 'м', sashArt, priceLevel), colorSurchargePct), 'profile'));
   }
 
   // Imposts (horizontal + vertical)
@@ -190,37 +200,81 @@ export function calcWindow(input) {
     const tagStr = mullionH > 0 && mullionV > 0 ? ' (гориз. + верт.)'
               : mullionH > 0 ? ' (горизонтальный)'
               : ' (вертикальный)';
-    allLines.push(tag(line(`Импост ${sys.name}${tagStr}`, totalMullion, 'м', mullArt, priceLevel), 'profile'));
+    allLines.push(tag(applySurcharge(line(`Импост ${sys.name}${tagStr}${colorTag}`, totalMullion, 'м', mullArt, priceLevel), colorSurchargePct), 'profile'));
   }
 
   // Glazing
   const glazArt = art(glazingArticle(glaz.formula));
   allLines.push(tag(line(`Стеклопакет ${glaz.formula}`, glazingArea, 'м²', glazArt, priceLevel), 'glazing'));
 
-  // Hardware (per opening sash; doors get heavier hardware; sliding gets its own)
+  // Hardware — caller can pick a specific kit; otherwise default Roto NT
   const winSashCount = openCount - doorCount - slidingCount;
+  const hwKit = hardwareKitId ? db.prepare('SELECT * FROM hardware_kits WHERE id = ?').get(hardwareKitId) : null;
   if (winSashCount > 0) {
-    const hwArt = art('HW-ROTO-NT-PO');
-    allLines.push(tag(lineFlat(`Фурнитура Roto NT · оконная (×${winSashCount})`, winSashCount, 'компл.', hwArt, priceLevel), 'hardware'));
+    const kit = hwKit && hwKit.kind === 'window' ? hwKit : null;
+    if (kit) {
+      const unitPrice = Math.round(kit.price_per_sash * priceMultiplier(priceLevel));
+      allLines.push(tag({
+        label: `Фурнитура ${kit.vendor} · ${kit.name} (×${winSashCount})`, qty: `${winSashCount} компл.`,
+        qtyNum: winSashCount, unit: 'компл.', article: kit.id, unitPrice, price: unitPrice * winSashCount,
+      }, 'hardware'));
+    } else {
+      const hwArt = art('HW-ROTO-NT-PO');
+      allLines.push(tag(lineFlat(`Фурнитура Roto NT · оконная (×${winSashCount})`, winSashCount, 'компл.', hwArt, priceLevel), 'hardware'));
+    }
   }
   if (doorCount > 0) {
-    const hwArt = art('HW-ROTO-NT-PO');  // 1.5× as door-hw proxy
-    const price = Math.round(doorCount * hwArt[priceLevel] * 1.5);
-    allLines.push(tag({
-      label: `Фурнитура Roto NT · дверная (×${doorCount})`, qty: `${doorCount} компл.`,
-      qtyNum: doorCount, unit: 'компл.', article: hwArt.article,
-      unitPrice: Math.round(hwArt[priceLevel] * 1.5), price,
-    }, 'hardware'));
+    // door hardware kit (only if user picked one of kind='door')
+    const doorKit = hwKit && hwKit.kind === 'door' ? hwKit : null;
+    if (doorKit) {
+      const unitPrice = Math.round(doorKit.price_per_sash * priceMultiplier(priceLevel));
+      allLines.push(tag({
+        label: `Фурнитура ${doorKit.vendor} · ${doorKit.name} (×${doorCount})`, qty: `${doorCount} компл.`,
+        qtyNum: doorCount, unit: 'компл.', article: doorKit.id, unitPrice, price: unitPrice * doorCount,
+      }, 'hardware'));
+    } else {
+      const hwArt = art('HW-ROTO-NT-PO');
+      const price = Math.round(doorCount * hwArt[priceLevel] * 1.5);
+      allLines.push(tag({
+        label: `Фурнитура Roto NT · дверная (×${doorCount})`, qty: `${doorCount} компл.`,
+        qtyNum: doorCount, unit: 'компл.', article: hwArt.article,
+        unitPrice: Math.round(hwArt[priceLevel] * 1.5), price,
+      }, 'hardware'));
+    }
   }
   if (slidingCount > 0) {
-    const hwArt = art('HW-ROTO-NT-PO');
-    // sliding hardware costs ~1.8× single PO due to rails + roller carriages
-    const price = Math.round(slidingCount * hwArt[priceLevel] * 1.8);
-    allLines.push(tag({
-      label: `Фурнитура раздвижная (рельсы, каретки) (×${slidingCount})`, qty: `${slidingCount} компл.`,
-      qtyNum: slidingCount, unit: 'компл.', article: hwArt.article,
-      unitPrice: Math.round(hwArt[priceLevel] * 1.8), price,
-    }, 'hardware'));
+    const slKit = hwKit && hwKit.kind === 'sliding' ? hwKit : null;
+    if (slKit) {
+      const unitPrice = Math.round(slKit.price_per_sash * priceMultiplier(priceLevel));
+      allLines.push(tag({
+        label: `Фурнитура ${slKit.vendor} · ${slKit.name} (×${slidingCount})`, qty: `${slidingCount} компл.`,
+        qtyNum: slidingCount, unit: 'компл.', article: slKit.id, unitPrice, price: unitPrice * slidingCount,
+      }, 'hardware'));
+    } else {
+      const hwArt = art('HW-ROTO-NT-PO');
+      const price = Math.round(slidingCount * hwArt[priceLevel] * 1.8);
+      allLines.push(tag({
+        label: `Фурнитура раздвижная (рельсы, каретки) (×${slidingCount})`, qty: `${slidingCount} компл.`,
+        qtyNum: slidingCount, unit: 'компл.', article: hwArt.article,
+        unitPrice: Math.round(hwArt[priceLevel] * 1.8), price,
+      }, 'hardware'));
+    }
+  }
+  // Window/door handles (separate line) — qty = number of opening sashes (excluding fix)
+  if (handleId) {
+    const hnd = db.prepare('SELECT * FROM handles WHERE id = ?').get(handleId);
+    if (hnd) {
+      const handleQty = hnd.kind === 'door' ? Math.max(doorCount, 1) : winSashCount;
+      if (handleQty > 0) {
+        const colorH = handleColorId ? db.prepare('SELECT * FROM colors WHERE id = ?').get(handleColorId) : null;
+        const tagH = colorH ? ` · ${colorH.ral}` : '';
+        const unitPrice = Math.round(hnd.price * priceMultiplier(priceLevel));
+        allLines.push(tag({
+          label: `Ручка ${hnd.vendor} ${hnd.name}${tagH} (×${handleQty})`, qty: `${handleQty} шт`,
+          qtyNum: handleQty, unit: 'шт', article: hnd.id, unitPrice, price: unitPrice * handleQty,
+        }, 'hardware'));
+      }
+    }
   }
 
   // Reinforcement
@@ -240,19 +294,50 @@ export function calcWindow(input) {
     }, 'consumables'));
   }
 
-  // Extras
+  // Extras — sill / ebb / mesh, with optional catalog model selection
   if (extras.sill) {
-    const a = art('SILL-MOELLER-250');
-    allLines.push(tag(line('Подоконник Moeller 250 мм', w_m, 'м', a, priceLevel), 'extras'));
+    const sillRow = extras.sillId ? db.prepare('SELECT * FROM sills WHERE id = ?').get(extras.sillId) : null;
+    if (sillRow) {
+      const unitPrice = Math.round(sillRow.price_per_m * priceMultiplier(priceLevel));
+      allLines.push(tag({
+        label: `Подоконник ${sillRow.vendor} ${sillRow.name} ${sillRow.width_mm}мм${sillRow.color ? ' · ' + sillRow.color : ''}`,
+        qty: w_m.toFixed(2) + ' м', qtyNum: w_m, unit: 'м',
+        article: sillRow.id, unitPrice, price: Math.round(w_m * unitPrice),
+      }, 'extras'));
+    } else {
+      const a = art('SILL-MOELLER-250');
+      allLines.push(tag(line('Подоконник Moeller 250 мм', w_m, 'м', a, priceLevel), 'extras'));
+    }
   }
   if (extras.ebb) {
-    const a = art('EBB-150');
-    allLines.push(tag(line('Отлив оцинкованный 150 мм', w_m, 'м', a, priceLevel), 'extras'));
+    const ebbRow = extras.ebbId ? db.prepare('SELECT * FROM ebbs WHERE id = ?').get(extras.ebbId) : null;
+    if (ebbRow) {
+      const unitPrice = Math.round(ebbRow.price_per_m * priceMultiplier(priceLevel));
+      allLines.push(tag({
+        label: `Отлив ${ebbRow.material} ${ebbRow.width_mm}мм${ebbRow.color ? ' · ' + ebbRow.color : ''}`,
+        qty: w_m.toFixed(2) + ' м', qtyNum: w_m, unit: 'м',
+        article: ebbRow.id, unitPrice, price: Math.round(w_m * unitPrice),
+      }, 'extras'));
+    } else {
+      const a = art('EBB-150');
+      allLines.push(tag(line('Отлив оцинкованный 150 мм', w_m, 'м', a, priceLevel), 'extras'));
+    }
   }
   if (extras.mesh) {
-    const a = art('MESH-FRAME');
-    const qty = Math.max(1, openCount - doorCount || 1);
-    allLines.push(tag(lineFlat('Москитная сетка рамочная', qty, 'шт', a, priceLevel), 'extras'));
+    const meshQty = Math.max(1, openCount - doorCount || 1);
+    const meshRow = extras.meshId ? db.prepare('SELECT * FROM meshes WHERE id = ?').get(extras.meshId) : null;
+    if (meshRow) {
+      const unitPrice = Math.round(meshRow.price_per_unit * priceMultiplier(priceLevel));
+      const kindLabel = ({ frame: 'рамочная', sliding: 'раздвижная', pleated: 'плиссе', antikoshka: 'антикошка', roll: 'рулонная' })[meshRow.kind] || meshRow.kind;
+      allLines.push(tag({
+        label: `Москитная сетка ${kindLabel} · ${meshRow.name}${meshRow.color ? ' · ' + meshRow.color : ''}`,
+        qty: meshQty + ' ' + meshRow.unit, qtyNum: meshQty, unit: meshRow.unit,
+        article: meshRow.id, unitPrice, price: meshQty * unitPrice,
+      }, 'extras'));
+    } else {
+      const a = art('MESH-FRAME');
+      allLines.push(tag(lineFlat('Москитная сетка рамочная', meshQty, 'шт', a, priceLevel), 'extras'));
+    }
   }
   if (extras.install) {
     // Allow caller to override the install cost. Two shapes:
@@ -308,7 +393,7 @@ export function calcWindow(input) {
   const total = subtotal - discount;
 
   return {
-    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet] },
+    input: { width, height, layout, glazingId, systemId, manufacturerId, installerId, priceLevel, extras, scope: [...scopeSet], colorId, hardwareKitId, handleId, handleColorId },
     geometry: {
       framePerim: +framePerim.toFixed(3),
       mullionH: +mullionH.toFixed(3),
@@ -347,6 +432,10 @@ export function calcProject(input) {
       extras: it.extras || extras,
       scope: it.scope || scope,
       markupPct,
+      colorId: it.colorId,
+      hardwareKitId: it.hardwareKitId,
+      handleId: it.handleId,
+      handleColorId: it.handleColorId,
     });
     const qty = it.qty || 1;
     perItem.push({
@@ -375,6 +464,20 @@ export function calcProject(input) {
     totalSashes: perItem.reduce((s, p) => s + (p.geometry.openCount || 0) * (p.qty || 1), 0),
     vatIncluded: true, vatRate: 12,
   };
+}
+
+// Apply a percentage surcharge (e.g. RAL color +25%) to a single line in-place.
+function applySurcharge(ln, pct) {
+  if (!pct) return ln;
+  const f = 1 + pct / 100;
+  ln.unitPrice = Math.round(ln.unitPrice * f);
+  ln.price = Math.round(ln.price * f);
+  return ln;
+}
+// Map dealer/retail/base level multipliers to the catalog (price-per-* fields).
+// hardware_kits/handles/sills/ebbs/meshes store one base price; multiply by level.
+function priceMultiplier(level) {
+  return level === 'retail' ? 1.18 : level === 'dealer' ? 1.06 : 1.00;
 }
 
 function line(label, qty, unit, articleRow, priceLevel) {

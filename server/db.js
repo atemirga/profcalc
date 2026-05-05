@@ -188,6 +188,56 @@ try {
   if (!cols.includes('template_id')) db.exec("ALTER TABLE calculations ADD COLUMN template_id TEXT");
 } catch {}
 
+// ── PHASE 1: colors / hardware kits / sills / ebbs / meshes ──────────
+db.exec(`
+CREATE TABLE IF NOT EXISTS colors (
+  id TEXT PRIMARY KEY,
+  ral TEXT NOT NULL,                     -- 'RAL 7024', '9016', 'E6 EV1' etc
+  name TEXT NOT NULL,                    -- human label ('Графитовый серый')
+  hex TEXT,                              -- '#2c3034' for swatch
+  surcharge_pct INTEGER NOT NULL DEFAULT 0  -- profile price markup for this color
+);
+CREATE TABLE IF NOT EXISTS hardware_kits (
+  id TEXT PRIMARY KEY,
+  vendor TEXT NOT NULL,                  -- Roto / Maco / Siegenia
+  name TEXT NOT NULL,                    -- 'Roto NT'
+  kind TEXT NOT NULL DEFAULT 'window',   -- 'window' | 'door' | 'sliding'
+  price_per_sash INTEGER NOT NULL,
+  notes TEXT
+);
+CREATE TABLE IF NOT EXISTS handles (
+  id TEXT PRIMARY KEY,
+  vendor TEXT NOT NULL,                  -- Hoppe / Roto / DORMA
+  name TEXT NOT NULL,                    -- 'Hoppe Atlanta'
+  kind TEXT NOT NULL DEFAULT 'window',   -- 'window' | 'door'
+  color_default TEXT,                    -- default color id (FK colors.id)
+  price INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sills (
+  id TEXT PRIMARY KEY,
+  vendor TEXT NOT NULL,                  -- Moeller / Werzalit / Danke
+  name TEXT NOT NULL,                    -- 'Moeller'
+  width_mm INTEGER NOT NULL,             -- 200/250/300/400/500/600
+  color TEXT,                            -- 'белый' / 'дуб' etc
+  price_per_m INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ebbs (
+  id TEXT PRIMARY KEY,
+  material TEXT NOT NULL,                -- 'оцинковка' / 'алюминий' / 'ПВХ'
+  width_mm INTEGER NOT NULL,             -- 100/150/200/250/300
+  color TEXT,
+  price_per_m INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meshes (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,                    -- 'frame' / 'sliding' / 'pleated' / 'antikoshka' / 'roll'
+  name TEXT NOT NULL,                    -- 'Рамочная стандарт'
+  color TEXT,
+  price_per_unit INTEGER NOT NULL,       -- цена за шт
+  unit TEXT NOT NULL DEFAULT 'шт'
+);
+`);
+
 // notifications inbox
 db.exec(`CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -343,6 +393,92 @@ if (isEmpty('articles')) {
     ['EBB-150',          'Отлив оцинк. 150 мм',         'м',      1200, 1380, 1620, 'Доп. комплектующие'],
     ['MESH-FRAME',       'Москитная сетка рамочная',    'шт',     5400, 6150, 7300, 'Доп. комплектующие'],
     ['INSTALL',          'Монтаж',                      'объект', 14000,16000,18000, 'Услуги'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+
+// ── Phase 1 seeds ──────────────────────────────────────────────────────
+if (isEmpty('colors')) {
+  const ins = db.prepare(`INSERT INTO colors (id,ral,name,hex,surcharge_pct) VALUES (?,?,?,?,?)`);
+  const seeds = [
+    ['c-white',   '9016',     'Белый',                  '#f3f3f0',  0],
+    ['c-7024',    'RAL 7024', 'Графитовый серый',       '#2c3034', 25],
+    ['c-7016',    'RAL 7016', 'Антрацит',               '#383e42', 25],
+    ['c-9005',    'RAL 9005', 'Чёрный',                 '#0c0c0c', 25],
+    ['c-8014',    'RAL 8014', 'Сепия / тёмный дуб',     '#3a2a1d', 30],
+    ['c-oak-gold','E6 EV1',   'Золотой дуб (плёнка)',   '#b78c47', 35],
+    ['c-mahogany','—',        'Махагон',                '#5a2a20', 35],
+    ['c-anodix',  '—',        'Анодированный (двери)',  '#9c9c9a', 20],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('hardware_kits')) {
+  const ins = db.prepare(`INSERT INTO hardware_kits (id,vendor,name,kind,price_per_sash,notes) VALUES (?,?,?,?,?,?)`);
+  const seeds = [
+    ['hw-roto-nt',         'Roto',     'Roto NT',                 'window',  16800, 'Стандарт ПО, 5 точек'],
+    ['hw-roto-nt-design',  'Roto',     'Roto NT Designo (скр.)',  'window',  24800, 'Скрытые петли'],
+    ['hw-maco-mm',         'Maco',     'Maco Multi-Matic',        'window',  14500, 'Базовая Maco'],
+    ['hw-maco-mm-tip',     'Maco',     'Maco MM TipTronic',       'window',  38000, 'Электропривод'],
+    ['hw-siegenia-titan',  'Siegenia', 'Siegenia Titan AF',       'window',  17400, 'Antifrost AF'],
+    ['hw-roto-door',       'Roto',     'Roto Door (3 петли)',     'door',    28000, 'Дверная Roto'],
+    ['hw-maco-door',       'Maco',     'Maco Door',               'door',    22000, '3 петли'],
+    ['hw-sliding-portal',  'Roto',     'Roto Patio Inowa',        'sliding', 42000, 'Раздвижная'],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('handles')) {
+  const ins = db.prepare(`INSERT INTO handles (id,vendor,name,kind,color_default,price) VALUES (?,?,?,?,?,?)`);
+  const seeds = [
+    ['hnd-hoppe-atlanta', 'Hoppe', 'Hoppe Atlanta',      'window', 'c-white', 4200],
+    ['hnd-hoppe-secustic','Hoppe', 'Hoppe Secustic',     'window', 'c-white', 6800],
+    ['hnd-roto-line',     'Roto',  'Roto Line',          'window', 'c-white', 3500],
+    ['hnd-roto-swing',    'Roto',  'Roto Swing',         'window', 'c-7024',  4500],
+    ['hnd-dorma-klong',   'DORMA', 'DORMA K-LONG',       'door',   'c-7024',  4725],
+    ['hnd-dorma-pure',    'DORMA', 'DORMA Pure',         'door',   'c-9005',  6200],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('sills')) {
+  const ins = db.prepare(`INSERT INTO sills (id,vendor,name,width_mm,color,price_per_m) VALUES (?,?,?,?,?,?)`);
+  const seeds = [
+    ['sill-moeller-200', 'Moeller', 'Moeller', 200, 'белый',     3200],
+    ['sill-moeller-250', 'Moeller', 'Moeller', 250, 'белый',     3500],
+    ['sill-moeller-300', 'Moeller', 'Moeller', 300, 'белый',     4100],
+    ['sill-moeller-400', 'Moeller', 'Moeller', 400, 'белый',     5400],
+    ['sill-moeller-500', 'Moeller', 'Moeller', 500, 'белый',     6500],
+    ['sill-werzalit-300','Werzalit','Werzalit',300, 'дуб',       6800],
+    ['sill-danke-350',   'Danke',   'Danke Premium', 350, 'мрамор', 7400],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('ebbs')) {
+  const ins = db.prepare(`INSERT INTO ebbs (id,material,width_mm,color,price_per_m) VALUES (?,?,?,?,?)`);
+  const seeds = [
+    ['ebb-zn-100', 'оцинковка', 100, 'белый', 950],
+    ['ebb-zn-150', 'оцинковка', 150, 'белый', 1200],
+    ['ebb-zn-200', 'оцинковка', 200, 'белый', 1480],
+    ['ebb-zn-250', 'оцинковка', 250, 'белый', 1750],
+    ['ebb-al-150', 'алюминий',  150, 'RAL 7024', 1850],
+    ['ebb-al-200', 'алюминий',  200, 'RAL 7024', 2200],
+    ['ebb-pvc-150','ПВХ',       150, 'белый',  1100],
+  ];
+  const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
+  tx();
+}
+if (isEmpty('meshes')) {
+  const ins = db.prepare(`INSERT INTO meshes (id,kind,name,color,price_per_unit,unit) VALUES (?,?,?,?,?,?)`);
+  const seeds = [
+    ['mesh-frame-std',   'frame',     'Рамочная стандарт',     'белый',     5400, 'шт'],
+    ['mesh-frame-grey',  'frame',     'Рамочная антрацит',     'RAL 7024',  6200, 'шт'],
+    ['mesh-frame-anti',  'antikoshka','Антикошка',             'чёрный',   12800, 'шт'],
+    ['mesh-sliding',     'sliding',   'Раздвижная',            'белый',     8400, 'шт'],
+    ['mesh-pleated',     'pleated',   'Плиссе',                'белый',    18500, 'шт'],
+    ['mesh-roll',        'roll',      'Рулонная',              'белый',    16800, 'шт'],
   ];
   const tx = db.transaction(() => seeds.forEach(s => ins.run(...s)));
   tx();

@@ -184,6 +184,41 @@ api.post('/articles/bulk-bump', (req, res) => {
   res.json({ ok: true, changed: r.changes });
 });
 
+// ── Phase 1 catalogs: colors / hardware kits / handles / sills / ebbs / meshes
+function makeCrud(table, idField = 'id', allowedFields) {
+  api.get('/' + table, (_req, res) => res.json(db.prepare(`SELECT * FROM ${table} ORDER BY ${idField}`).all()));
+  api.post('/' + table, (req, res) => {
+    const fields = allowedFields.filter(f => req.body[f] !== undefined);
+    if (!fields.length || !req.body[idField]) return res.status(400).json({ error: idField + ' required' });
+    const cols = fields.join(','); const ph = fields.map(() => '?').join(',');
+    db.prepare(`INSERT INTO ${table} (${cols}) VALUES (${ph})`).run(...fields.map(f => req.body[f]));
+    logEvent('admin', table + '.create', req.body[idField]);
+    res.json({ ok: true });
+  });
+  api.put('/' + table + '/:id', (req, res) => {
+    const cur = db.prepare(`SELECT * FROM ${table} WHERE ${idField} = ?`).get(req.params.id);
+    if (!cur) return res.status(404).json({ error: 'not found' });
+    const sets = []; const vals = [];
+    for (const f of allowedFields) if (req.body[f] !== undefined && f !== idField) { sets.push(`${f}=?`); vals.push(req.body[f]); }
+    if (!sets.length) return res.json({ ok: true });
+    vals.push(req.params.id);
+    db.prepare(`UPDATE ${table} SET ${sets.join(',')} WHERE ${idField} = ?`).run(...vals);
+    logEvent('admin', table + '.update', req.params.id);
+    res.json({ ok: true });
+  });
+  api.delete('/' + table + '/:id', (req, res) => {
+    db.prepare(`DELETE FROM ${table} WHERE ${idField} = ?`).run(req.params.id);
+    logEvent('admin', table + '.delete', req.params.id);
+    res.json({ ok: true });
+  });
+}
+makeCrud('colors',         'id', ['id','ral','name','hex','surcharge_pct']);
+makeCrud('hardware_kits',  'id', ['id','vendor','name','kind','price_per_sash','notes']);
+makeCrud('handles',        'id', ['id','vendor','name','kind','color_default','price']);
+makeCrud('sills',          'id', ['id','vendor','name','width_mm','color','price_per_m']);
+makeCrud('ebbs',           'id', ['id','material','width_mm','color','price_per_m']);
+makeCrud('meshes',         'id', ['id','kind','name','color','price_per_unit','unit']);
+
 // ── calc scope categories (profile / hardware / glazing / …) ───────────
 api.get('/calc/categories', (_req, res) => {
   res.json(CATEGORIES.map(id => ({ id, label: CATEGORY_LABELS[id] })));
