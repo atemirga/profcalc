@@ -927,18 +927,31 @@
       if (!item._mode) item._mode = (item.shape && item.shape.kind && item.shape.kind !== 'rectangle') ? 'custom' : 'template';
       body.appendChild(h('div', { class: 'section-label' }, 'Конструкция'));
 
-      // Mode toggle (segmented control)
+      // Mode toggle (segmented control). 'custom' is временно отключён —
+      // таб остаётся виден, но не нажимается; по тапу показываем инфо-модалку.
       body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:10px;padding:6px;background:#f0ece4' },
         h('div', { style: 'display:flex;gap:4px;background:transparent' }, [
-          ['template', '📋 Из шаблона',  'готовые раскладки'],
-          ['custom',   '✏️ Свой контур', 'форма + размеры'],
-        ].map(([k, lbl, sub]) => {
+          ['template', '📋 Из шаблона',  'готовые раскладки', false],
+          ['custom',   '✏️ Свой контур', 'скоро',             true],
+        ].map(([k, lbl, sub, disabled]) => {
           const isSel = item._mode === k;
+          const onClick = disabled
+            ? () => sheet({
+                title: '✏️ Свой контур — скоро',
+                body: h('div', { style: 'font-size:13px;line-height:1.5;color:var(--text)' }, [
+                  h('p', { style: 'margin:0 0 10px' }, 'Эта функция пока недоступна.'),
+                  h('p', { style: 'margin:0 0 10px' }, 'Здесь можно будет самому нарисовать контур окна в векторном редакторе: задать произвольную форму точками, выставить размеры сторон, добавить арки и углы — для нестандартных проёмов, которых нет в готовых шаблонах.'),
+                  h('p', { style: 'margin:0;color:var(--muted)' }, 'Пока пользуйтесь вкладкой «📋 Из шаблона» — там 18 готовых раскладок.'),
+                ]),
+                onSubmit: () => {},
+                submit: 'Понятно',
+              })
+            : () => { item._mode = k; paint(); };
           return h('button', {
-            onClick: () => { item._mode = k; paint(); },
-            style: `flex:1;padding:8px 10px;border-radius:8px;border:none;background:${isSel ? '#fff' : 'transparent'};color:${isSel ? 'var(--accent-dark)' : 'var(--muted)'};font-size:12.5px;font-weight:${isSel ? 700 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:1px;${isSel ? 'box-shadow:0 1px 3px rgba(0,0,0,.08)' : ''}`,
+            onClick,
+            style: `flex:1;padding:8px 10px;border-radius:8px;border:none;background:${isSel ? '#fff' : 'transparent'};color:${isSel ? 'var(--accent-dark)' : 'var(--muted)'};font-size:12.5px;font-weight:${isSel ? 700 : 500};cursor:${disabled ? 'not-allowed' : 'pointer'};display:flex;flex-direction:column;align-items:center;gap:1px;position:relative;${disabled ? 'opacity:.55;' : ''}${isSel ? 'box-shadow:0 1px 3px rgba(0,0,0,.08)' : ''}`,
           }, [
-            h('span', {}, lbl),
+            h('span', {}, disabled ? lbl + ' 🔒' : lbl),
             h('span', { style: 'font-size:10px;font-weight:500;opacity:.75' }, sub),
           ]);
         }))));
