@@ -1791,12 +1791,11 @@
   }
   function closeSheet() { if (window._sheet) { window._sheet.remove(); window._sheet = null; } }
 
-  // ── SHAPE VECTOR EDITOR ──────────────────────────────────────────────
-  // Interactive editor for the outer contour of the window/door:
-  // • drag corner/control handles in SVG to reshape live
-  // • numeric inputs synchronized with handles (drag → input updates, vice versa)
-  // • shape-specific controls (radius for circle, arch_rise for arched, vertices for polygon)
-  // • live perim & area calculation
+  // ── SHAPE VECTOR EDITOR (rewrite v2) ──────────────────────────────
+  // Vector editor with: snap-to-10mm, per-handle value labels, bbox-aware
+  // canvas (so half_circle/circle/quarter_circle don't waste vertical space),
+  // dimension clamping on shape switch, partial DOM updates on drag (no
+  // full re-render → smooth + no flicker), pointer events (touch + mouse).
   screens['shape-editor'] = async function () {
     setBackButton(() => go('edit-item'));
     setMainButton(null);
@@ -1807,231 +1806,82 @@
     if (!item.shape) item.shape = { kind: 'rectangle', width: item.layout.width, height: item.layout.height, params: {} };
     const sh = item.shape;
     if (!sh.params) sh.params = {};
-    if (!sh.width)  sh.width = item.layout.width;
-    if (!sh.height) sh.height = item.layout.height;
+    if (!sh.width)  sh.width  = item.layout.width  || 1500;
+    if (!sh.height) sh.height = item.layout.height || 1400;
 
-    function paint() {
-      clear(root);
-      root.appendChild(bar('Редактор формы', { back: () => go('edit-item') }));
-      const body = h('div', { class: 'body no-tabs' });
-      root.appendChild(body);
+    // ── constants & helpers ──
+    const SNAP = 10;
+    const NS = 'http://www.w3.org/2000/svg';
+    const snap = (v) => Math.round(v / SNAP) * SNAP;
+    const clamp = (lo, hi, v) => Math.max(lo, Math.min(hi, v));
+    function ns(t, attrs) { const e = document.createElementNS(NS, t); for (const k in attrs) if (attrs[k] != null) e.setAttribute(k, attrs[k]); return e; }
+    const SHAPE_ICONS = { rectangle: '▭', arched: '⌒', half_circle: '◠', triangle: '▲', trapezoid: '⊿', gothic: '⌃', pentagon: '⬠', hexagon: '⬡', oval: '⬭', circle: '⬤', quarter_circle: '◔', polygon: '✚' };
+    const SHAPE_NAMES = { rectangle: 'Прямоуг.', arched: 'Арка', half_circle: 'Полукруг', triangle: 'Треуг.', trapezoid: 'Трапеция', gothic: 'Готика', pentagon: 'Пентагон', hexagon: 'Гексагон', oval: 'Овал', circle: 'Круг', quarter_circle: '¼ круг', polygon: 'Многоуг.' };
+    const PARAM_LABELS = {
+      arch_rise: 'Подъём арки',
+      apex_x: 'Вершина X (треугольник)',
+      left_h: 'Высота слева (трапеция)',
+      right_h: 'Высота справа (трапеция)',
+      peak_offset: 'Смещение пика (готика)',
+      peak_h: 'Высота пика (пентагон)',
+      side_h: 'Высота скосов (гексагон)',
+    };
 
-      // Shape kind picker (chips)
-      body.appendChild(h('div', { class: 'section-label' }, 'Форма'));
-      const SHAPE_ICONS = { rectangle: '▭', arched: '⌒', half_circle: '◠', triangle: '▲', trapezoid: '⊿', gothic: '⌃', pentagon: '⬠', hexagon: '⬡', oval: '⬭', circle: '⬤', quarter_circle: '◔', polygon: '✚' };
-      const SHAPE_NAMES = { rectangle: 'Прямоуг.', arched: 'Арка', half_circle: 'Полукруг', triangle: 'Треугольник', trapezoid: 'Трапеция', gothic: 'Готика', pentagon: 'Пентагон', hexagon: 'Гексагон', oval: 'Овал', circle: 'Круг', quarter_circle: '¼ круг', polygon: 'Многоуг.' };
-      const kinds = ['rectangle', 'arched', 'half_circle', 'triangle', 'trapezoid', 'gothic', 'circle', 'oval', 'pentagon', 'hexagon', 'quarter_circle', 'polygon'];
-      body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:14px' },
-        h('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px' },
-          kinds.map(k => {
-            const isSel = sh.kind === k;
-            return h('button', {
-              onClick: () => {
-                sh.kind = k;
-                // reset params per shape default
-                const sRow = state.cache.shapeTypes.find(s => s.code === k);
-                let def = {};
-                try { def = JSON.parse(sRow?.params_schema || '{}'); } catch {}
-                sh.params = { ...def };
-                paint();
-              },
-              style: `padding:8px 4px;border-radius:8px;border:1.5px solid ${isSel ? 'var(--accent)' : 'var(--rule)'};background:${isSel ? 'var(--accent)' : '#fff'};color:${isSel ? '#fff' : 'var(--text)'};font-size:10.5px;font-weight:${isSel ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px`,
-            }, [
-              h('span', { style: 'font-size:18px;line-height:1' }, SHAPE_ICONS[k] || '◌'),
-              h('span', { style: 'font-size:10px' }, SHAPE_NAMES[k]),
-            ]);
-          }))));
-
-      // SVG canvas with draggable handles
-      body.appendChild(h('div', { class: 'section-label' }, 'Перетащите точки чтобы изменить'));
-      const svgWrap = h('div', { class: 'card pad', style: 'margin-bottom:14px;background:#faf7f1' });
-      const CANVAS_W = Math.min(window.innerWidth - 60, 360);
-      const CANVAS_H = 320;
-      const PAD = 30;
-      // Compute scale so the shape fits canvas
-      const maxDim = Math.max(sh.width, sh.height);
-      const scale = (Math.min(CANVAS_W, CANVAS_H) - PAD * 2) / maxDim;
-      const offsetX = (CANVAS_W - sh.width * scale) / 2;
-      const offsetY = (CANVAS_H - sh.height * scale) / 2;
-      const toScreen = (xMm, yMm) => [offsetX + xMm * scale, offsetY + yMm * scale];
-      const fromScreen = (xPx, yPx) => [(xPx - offsetX) / scale, (yPx - offsetY) / scale];
-
-      const NS = 'http://www.w3.org/2000/svg';
-      function el(t, a) { const e = document.createElementNS(NS, t); for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]); return e; }
-      const svg = el('svg', { width: CANVAS_W, height: CANVAS_H, viewBox: `0 0 ${CANVAS_W} ${CANVAS_H}`, style: 'display:block;background:#fff;border-radius:8px;border:1px solid var(--rule)' });
-      // Allow page-scroll on areas of the canvas that are not handles —
-      // touch-action:none is set per-handle, NOT on the whole SVG.
-
-      // ── Phase Vec-2: 100mm grid for visual orientation
-      const gridStep = 100;  // mm
-      const gridG = el('g', { stroke: '#e8e1d0', 'stroke-width': '0.5', fill: 'none' });
-      // Vertical grid lines every 100mm
-      for (let xMm = 0; xMm <= sh.width; xMm += gridStep) {
-        const [x1, y1] = toScreen(xMm, 0);
-        const [x2, y2] = toScreen(xMm, sh.height);
-        const ln = el('line', { x1, y1, x2, y2 });
-        // every 500mm — slightly darker
-        if (xMm % 500 === 0) ln.setAttribute('stroke', '#cfc7b5');
-        gridG.appendChild(ln);
+    // ── shape bbox in mm (defines drawn area, may be smaller than W × H) ──
+    function shapeBbox() {
+      const W = sh.width, H = sh.height;
+      switch (sh.kind) {
+        case 'half_circle': return { x0: 0, y0: 0, x1: W, y1: W / 2 };
+        case 'circle':       return { x0: 0, y0: 0, x1: W, y1: W };
+        case 'quarter_circle': { const r = Math.min(W, H); return { x0: 0, y0: 0, x1: r, y1: r }; }
+        default: return { x0: 0, y0: 0, x1: W, y1: H };
       }
-      for (let yMm = 0; yMm <= sh.height; yMm += gridStep) {
-        const [x1, y1] = toScreen(0, yMm);
-        const [x2, y2] = toScreen(sh.width, yMm);
-        const ln = el('line', { x1, y1, x2, y2 });
-        if (yMm % 500 === 0) ln.setAttribute('stroke', '#cfc7b5');
-        gridG.appendChild(ln);
-      }
-      svg.appendChild(gridG);
-
-      // Compute geometry path + control handles based on shape kind
-      const geo = computeShapeOnCanvas(sh, toScreen);
-      // Render path (filled with light glass color, framed)
-      const pathEl = el('path', { d: geo.d, fill: 'rgba(180, 220, 235, 0.30)', stroke: '#b56b3a', 'stroke-width': 2.5 });
-      svg.appendChild(pathEl);
-      // Draw dimension lines
-      drawDims(svg, sh, toScreen);
-      // Draw control handles (last so they're on top)
-      const handles = computeHandles(sh, toScreen);
-      handles.forEach((hd, idx) => {
-        const c = el('circle', {
-          cx: hd.x, cy: hd.y, r: 14,  // larger touch target on mobile
-          fill: '#fff', stroke: '#b56b3a', 'stroke-width': 2.5,
-          style: 'cursor:grab;touch-action:none',
-        });
-        // label inside
-        const lab = el('text', { x: hd.x, y: hd.y + 3, 'text-anchor': 'middle', 'font-family': 'Inter,sans-serif', 'font-size': 9, 'font-weight': 700, fill: '#b56b3a', style: 'pointer-events:none;user-select:none' });
-        lab.textContent = hd.label || (idx + 1);
-        // Drag interaction
-        let startTouch = null, startMmCoords = null;
-        function onDown(ev) {
-          // Only stop propagation/default — don't block page scroll outside handles
-          ev.stopPropagation();
-          ev.preventDefault();
-          const t = (ev.touches && ev.touches[0]) || ev;
-          startTouch = { x: t.clientX, y: t.clientY };
-          startMmCoords = hd.getValue();
-          c.setAttribute('stroke-width', '4');
-          c.setAttribute('r', '16');
-          window.addEventListener('mousemove', onMove);
-          window.addEventListener('mouseup', onUp);
-          // Non-passive so we can preventDefault during drag (otherwise page tries to scroll)
-          window.addEventListener('touchmove', onMove, { passive: false });
-          window.addEventListener('touchend', onUp);
-          window.addEventListener('touchcancel', onUp);
-        }
-        function onMove(ev) {
-          ev.preventDefault?.();
-          const t = (ev.touches && ev.touches[0]) || ev;
-          const dxPx = t.clientX - startTouch.x;
-          const dyPx = t.clientY - startTouch.y;
-          const dxMm = dxPx / scale;
-          const dyMm = dyPx / scale;
-          hd.setValue(startMmCoords, dxMm, dyMm);
-          // re-paint via repaint (debounced via rAF)
-          if (!window._shapeRaf) window._shapeRaf = requestAnimationFrame(() => { window._shapeRaf = null; paint(); });
-        }
-        function onUp() {
-          c.setAttribute('stroke-width', '2.5');
-          c.setAttribute('r', '14');
-          window.removeEventListener('mousemove', onMove);
-          window.removeEventListener('mouseup', onUp);
-          window.removeEventListener('touchmove', onMove);
-          window.removeEventListener('touchend', onUp);
-          window.removeEventListener('touchcancel', onUp);
-        }
-        c.addEventListener('mousedown', onDown);
-        c.addEventListener('touchstart', onDown, { passive: false });
-        svg.appendChild(c);
-        svg.appendChild(lab);
-      });
-      svgWrap.appendChild(svg);
-      // Live geometry summary under SVG
-      const m = computeMetrics(sh);
-      svgWrap.appendChild(h('div', { style: 'display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--text);margin-top:10px;padding-top:10px;border-top:1px dashed var(--rule)' }, [
-        h('div', {}, `Размер: ${sh.width} × ${sh.height} мм`),
-        h('div', { style: 'color:var(--accent)' }, `${m.area.toFixed(2)} м² · ${m.perim.toFixed(2)} м`),
-      ]));
-      body.appendChild(svgWrap);
-
-      // Numeric inputs — width / height + shape-specific params
-      body.appendChild(h('div', { class: 'section-label' }, 'Точные значения'));
-      const inputsCard = h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-direction:column;gap:8px' });
-      function num(label, getter, setter, min = 100, max = 8000, step = 10) {
-        const inp = h('input', { type: 'number', value: getter(), min, max, step, style: 'flex:1;padding:7px 10px;border:1px solid var(--rule);border-radius:7px;font-family:var(--mono);font-size:13px;text-align:right' });
-        inp.addEventListener('change', () => { setter(parseFloat(inp.value) || 0); paint(); });
-        return h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
-          h('span', { style: 'flex:1;font-size:12.5px;color:var(--muted)' }, label),
-          inp,
-          h('span', { style: 'font-size:11px;color:var(--muted)' }, 'мм'),
-        ]);
-      }
-      // Always: width + height
-      inputsCard.appendChild(num('Ширина (W)',  () => sh.width,  v => sh.width = v));
-      inputsCard.appendChild(num('Высота (H)',  () => sh.height, v => sh.height = v));
-      // Shape-specific
-      const sRow = state.cache.shapeTypes.find(s => s.code === sh.kind);
-      let schemaParams = {};
-      try { schemaParams = JSON.parse(sRow?.params_schema || '{}'); } catch {}
-      const PARAM_LABELS = {
-        arch_rise: 'Подъём арки',
-        apex_x: 'Вершина X (треуг.)',
-        left_h: 'Высота слева (трапеция)',
-        right_h: 'Высота справа (трапеция)',
-        peak_offset: 'Смещение пика (готика)',
-        peak_h: 'Высота пика (пентагон)',
-        side_h: 'Высота боков (гексагон)',
-      };
-      Object.keys(schemaParams).forEach(k => {
-        if (k === 'vertices' || k === 'panels' || k === 'angle') return;
-        if (sh.params[k] == null) sh.params[k] = schemaParams[k];
-        inputsCard.appendChild(num(PARAM_LABELS[k] || k, () => sh.params[k] || 0, v => sh.params[k] = v));
-      });
-      // Diameter / radius for circle (linked to width)
-      if (sh.kind === 'circle') {
-        inputsCard.appendChild(h('div', { style: 'font-size:11px;color:var(--muted);font-family:var(--mono);text-align:center;padding-top:4px' },
-          `R = ${(sh.width / 2).toFixed(0)} мм · D = ${sh.width.toFixed(0)} мм`));
-      }
-      if (sh.kind === 'oval') {
-        inputsCard.appendChild(h('div', { style: 'font-size:11px;color:var(--muted);font-family:var(--mono);text-align:center;padding-top:4px' },
-          `Полуоси: a = ${(sh.width / 2).toFixed(0)} мм, b = ${(sh.height / 2).toFixed(0)} мм`));
-      }
-      // Polygon — vertex editor
-      if (sh.kind === 'polygon') {
-        const verts = sh.params.vertices || [[0, 0], [sh.width, 0], [sh.width, sh.height], [0, sh.height]];
-        sh.params.vertices = verts;
-        inputsCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted);margin-top:6px;padding-top:6px;border-top:1px dashed var(--rule)' }, `Вершин: ${verts.length}`));
-        inputsCard.appendChild(h('div', { class: 'btn-row' }, [
-          h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => {
-            const last = verts[verts.length - 1], first = verts[0];
-            verts.push([(last[0] + first[0]) / 2, (last[1] + first[1]) / 2]);
-            paint();
-          } }, '+ Вершина'),
-          h('button', { class: 'btn btn-secondary', style: 'flex:1', disabled: verts.length <= 3, onClick: () => { if (verts.length > 3) verts.pop(); paint(); } }, '− Вершина'),
-        ]));
-      }
-      body.appendChild(inputsCard);
-
-      // Save / Cancel
-      body.appendChild(h('div', { class: 'btn-row' }, [
-        h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => go('edit-item') }, 'Отмена'),
-        h('button', { class: 'btn btn-accent', style: 'flex:1.4', onClick: () => {
-          item.layout.width = Math.round(sh.width);
-          item.layout.height = Math.round(sh.height);
-          state.lastResult = null;
-          toast('Форма сохранена', 'success');
-          go('edit-item');
-        } }, 'Сохранить'),
-      ]));
     }
 
-    // ── Geometry helpers (client-side mirror of server/shapes.js)
-    function computeShapeOnCanvas(sh, toScreen) {
+    // ── clamp params so shape stays valid for current W × H ──
+    function clampParams() {
+      const W = sh.width, H = sh.height;
+      const p = sh.params;
+      if ('arch_rise' in p)   p.arch_rise   = clamp(50, H - 200, p.arch_rise);
+      if ('peak_h' in p)      p.peak_h      = clamp(50, H - 200, p.peak_h);
+      if ('apex_x' in p)      p.apex_x      = clamp(0, W, p.apex_x);
+      if ('left_h' in p)      p.left_h      = clamp(50, H, p.left_h);
+      if ('right_h' in p)     p.right_h     = clamp(50, H, p.right_h);
+      if ('peak_offset' in p) p.peak_offset = clamp(-W / 2, W / 2, p.peak_offset);
+      if ('side_h' in p)      p.side_h      = clamp(50, H / 2 - 50, p.side_h);
+    }
+
+    // ── normalize on shape kind switch ──
+    function switchKind(newKind) {
+      sh.kind = newKind;
+      // force-aspect for shapes that need it
+      if (newKind === 'half_circle') {
+        sh.height = Math.max(150, Math.round(sh.width / 2));
+      } else if (newKind === 'circle' || newKind === 'quarter_circle') {
+        const d = clamp(300, 4000, Math.max(sh.width, sh.height));
+        sh.width = d; sh.height = d;
+      }
+      // load default params from server schema
+      const sRow = state.cache.shapeTypes.find(s => s.code === newKind);
+      let defParams = {};
+      try { defParams = JSON.parse(sRow?.params_schema || '{}'); } catch {}
+      sh.params = { ...defParams };
+      // polygon defaults
+      if (newKind === 'polygon' && (!sh.params.vertices || sh.params.vertices.length < 3)) {
+        sh.params.vertices = [[0, 0], [sh.width, 0], [sh.width, sh.height], [0, sh.height]];
+      }
+      clampParams();
+      paint();
+    }
+
+    // ── path d-attribute for shape ──
+    function computePath(toScreen, scaleX, scaleY) {
       const W = sh.width, H = sh.height;
       const p = sh.params || {};
       switch (sh.kind) {
         case 'rectangle': {
           const [x1, y1] = toScreen(0, 0); const [x2, y2] = toScreen(W, H);
-          return { d: `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2} L ${x1} ${y2} Z` };
+          return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2} L ${x1} ${y2} Z`;
         }
         case 'arched': {
           const rise = p.arch_rise || 400;
@@ -2040,23 +1890,22 @@
           const [x2, y2] = toScreen(0, rectH);
           const [x3, y3] = toScreen(W, rectH);
           const [x4, y4] = toScreen(W, H);
-          const rx = (W * scaleVal()) / 2; // arc radius in px (depends on scale)
-          const ry = rise * scaleVal();
-          return { d: `M ${x1} ${y1} L ${x2} ${y2} A ${rx} ${ry} 0 0 1 ${x3} ${y3} L ${x4} ${y4} Z` };
+          const rxPx = (W / 2) * scaleX, ryPx = rise * scaleY;
+          return `M ${x1} ${y1} L ${x2} ${y2} A ${rxPx} ${ryPx} 0 0 1 ${x3} ${y3} L ${x4} ${y4} Z`;
         }
         case 'half_circle': {
           const r = W / 2;
           const [x1, y1] = toScreen(0, r);
           const [x2, y2] = toScreen(W, r);
-          const rPx = r * scaleVal();
-          return { d: `M ${x1} ${y1} A ${rPx} ${rPx} 0 0 1 ${x2} ${y2} L ${x2} ${y2} L ${x1} ${y1} Z` };
+          const rxPx = r * scaleX, ryPx = r * scaleY;
+          return `M ${x1} ${y1} A ${rxPx} ${ryPx} 0 0 1 ${x2} ${y2} Z`;
         }
         case 'triangle': {
           const ax = p.apex_x != null ? p.apex_x : W / 2;
           const [x1, y1] = toScreen(0, H);
           const [x2, y2] = toScreen(ax, 0);
           const [x3, y3] = toScreen(W, H);
-          return { d: `M ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z` };
+          return `M ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`;
         }
         case 'trapezoid': {
           const lh = p.left_h != null ? p.left_h : H;
@@ -2065,7 +1914,7 @@
           const [x2, y2] = toScreen(W, H - rh);
           const [x3, y3] = toScreen(W, H);
           const [x4, y4] = toScreen(0, H);
-          return { d: `M ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} L ${x4} ${y4} Z` };
+          return `M ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} L ${x4} ${y4} Z`;
         }
         case 'gothic': {
           const rise = p.arch_rise || 500;
@@ -2078,332 +1927,443 @@
           const [x5, y5] = toScreen(W, H);
           const [c1x, c1y] = toScreen(W / 4, 0);
           const [c2x, c2y] = toScreen(3 * W / 4, 0);
-          return { d: `M ${x1} ${y1} L ${x2} ${y2} Q ${c1x} ${c1y} ${px} ${py} Q ${c2x} ${c2y} ${x4} ${y4} L ${x5} ${y5} Z` };
+          return `M ${x1} ${y1} L ${x2} ${y2} Q ${c1x} ${c1y} ${px} ${py} Q ${c2x} ${c2y} ${x4} ${y4} L ${x5} ${y5} Z`;
         }
         case 'circle': {
           const r = W / 2;
           const [cx, cy] = toScreen(W / 2, H / 2);
-          const rPx = r * scaleVal();
-          return { d: `M ${cx - rPx} ${cy} A ${rPx} ${rPx} 0 0 1 ${cx + rPx} ${cy} A ${rPx} ${rPx} 0 0 1 ${cx - rPx} ${cy} Z` };
+          const rPx = r * scaleX;
+          return `M ${cx - rPx} ${cy} A ${rPx} ${rPx} 0 0 1 ${cx + rPx} ${cy} A ${rPx} ${rPx} 0 0 1 ${cx - rPx} ${cy} Z`;
         }
         case 'oval': {
           const a = W / 2, b = H / 2;
           const [cx, cy] = toScreen(W / 2, H / 2);
-          const aPx = a * scaleVal();
-          const bPx = b * scaleVal();
-          return { d: `M ${cx - aPx} ${cy} A ${aPx} ${bPx} 0 0 1 ${cx + aPx} ${cy} A ${aPx} ${bPx} 0 0 1 ${cx - aPx} ${cy} Z` };
+          const aPx = a * scaleX, bPx = b * scaleY;
+          return `M ${cx - aPx} ${cy} A ${aPx} ${bPx} 0 0 1 ${cx + aPx} ${cy} A ${aPx} ${bPx} 0 0 1 ${cx - aPx} ${cy} Z`;
         }
         case 'pentagon': {
           const peakH = p.peak_h || 300;
           const rectH = H - peakH;
           const pts = [[0, H], [0, rectH], [W / 2, 0], [W, rectH], [W, H]];
-          return { d: 'M ' + pts.map(pt => toScreen(...pt).join(' ')).join(' L ') + ' Z' };
+          return 'M ' + pts.map(pt => toScreen(...pt).join(' ')).join(' L ') + ' Z';
         }
         case 'hexagon': {
           const sideH = p.side_h || H * 0.25;
           const pts = [[0, H - sideH], [W / 2, H], [W, H - sideH], [W, sideH], [W / 2, 0], [0, sideH]];
-          return { d: 'M ' + pts.map(pt => toScreen(...pt).join(' ')).join(' L ') + ' Z' };
+          return 'M ' + pts.map(pt => toScreen(...pt).join(' ')).join(' L ') + ' Z';
         }
         case 'quarter_circle': {
           const r = Math.min(W, H);
           const [x1, y1] = toScreen(0, H);
           const [x2, y2] = toScreen(0, H - r);
           const [x3, y3] = toScreen(r, H);
-          const rPx = r * scaleVal();
-          return { d: `M ${x1} ${y1} L ${x2} ${y2} A ${rPx} ${rPx} 0 0 1 ${x3} ${y3} Z` };
+          const rxPx = r * scaleX, ryPx = r * scaleY;
+          return `M ${x1} ${y1} L ${x2} ${y2} A ${rxPx} ${ryPx} 0 0 1 ${x3} ${y3} Z`;
         }
         case 'polygon': {
           const verts = p.vertices || [[0, 0], [W, 0], [W, H], [0, H]];
-          return { d: 'M ' + verts.map(v => toScreen(...v).join(' ')).join(' L ') + ' Z' };
+          return 'M ' + verts.map(v => toScreen(...v).join(' ')).join(' L ') + ' Z';
         }
       }
-      return { d: '' };
+      return '';
     }
-    function scaleVal() {
-      const maxDim = Math.max(sh.width, sh.height);
-      return (Math.min(CANVAS_W, CANVAS_H) - PAD * 2) / maxDim;
-    }
-    function computeHandles(sh, toScreen) {
+
+    // ── handles for current shape ──
+    function buildHandles() {
       const W = sh.width, H = sh.height;
       const p = sh.params || {};
       const out = [];
-      function H_(label, xMm, yMm, getVal, setVal) {
-        const [x, y] = toScreen(xMm, yMm);
-        out.push({ label, x, y, getValue: getVal, setValue: setVal });
+      function H_(label, xMm, yMm, getter, setter, valueLabel) {
+        out.push({ label, xMm, yMm, getValue: getter, setValue: setter, valueLabel });
       }
       switch (sh.kind) {
         case 'rectangle':
-          H_('W', W, H / 2,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
-          H_('H', W / 2, H,
-            () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(300, Math.min(4000, Math.round(v0 + dy))); });
+          H_('W', W, H/2, () => sh.width,  (v0, dx) => { sh.width  = clamp(300, 8000, snap(v0 + dx)); clampParams(); }, () => 'W: ' + sh.width + 'мм');
+          H_('H', W/2, H, () => sh.height, (v0, dx, dy) => { sh.height = clamp(300, 4000, snap(v0 + dy)); clampParams(); }, () => 'H: ' + sh.height + 'мм');
           break;
         case 'arched': {
-          const rise = p.arch_rise || 400;
-          H_('W', W, H / 2,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
-          H_('H', W / 2, H,
-            () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(rise + 200, Math.min(4000, Math.round(v0 + dy))); });
-          H_('▼', W / 2, H - rise,
+          H_('W', W, H/2, () => sh.width,  (v0, dx)     => { sh.width = clamp(300, 8000, snap(v0 + dx)); clampParams(); }, () => 'W: ' + sh.width + 'мм');
+          H_('H', W/2, H, () => sh.height, (v0, dx, dy) => { sh.height = clamp((sh.params.arch_rise || 400) + 200, 4000, snap(v0 + dy)); }, () => 'H: ' + sh.height + 'мм');
+          H_('▲', W/2, H - (p.arch_rise || 400),
             () => p.arch_rise || 400,
-            (v0, dx, dy) => { sh.params.arch_rise = Math.max(50, Math.min(sh.height - 200, Math.round(v0 - dy))); });
+            (v0, dx, dy) => { sh.params.arch_rise = clamp(50, sh.height - 200, snap(v0 - dy)); },
+            () => 'rise: ' + (sh.params.arch_rise || 400) + 'мм');
           break;
         }
-        case 'half_circle': {
-          H_('R', W, H / 2,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); sh.height = sh.width / 2; });
+        case 'half_circle':
+          H_('R', W, W/4, () => sh.width,
+            (v0, dx) => { const w = clamp(300, 4000, snap(v0 + dx)); sh.width = w; sh.height = Math.round(w / 2); },
+            () => 'D: ' + sh.width + 'мм');
           break;
-        }
         case 'triangle': {
-          const ax = p.apex_x != null ? p.apex_x : W / 2;
+          const ax = p.apex_x != null ? p.apex_x : W/2;
           H_('1', 0, H,
             () => ({ w: sh.width, h: sh.height }),
             (v0, dx, dy) => {
-              sh.width  = Math.max(300, Math.min(8000, Math.round(v0.w - dx)));
-              sh.height = Math.max(300, Math.min(4000, Math.round(v0.h + dy)));
-            });
+              sh.width  = clamp(300, 8000, snap(v0.w - dx));
+              sh.height = clamp(300, 4000, snap(v0.h + dy));
+              clampParams();
+            },
+            () => '0×' + sh.height + 'мм');
           H_('2', ax, 0,
-            () => ({ ax: ax, h: sh.height }),
+            () => ({ ax, h: sh.height }),
             (v0, dx, dy) => {
-              sh.params.apex_x = Math.max(0, Math.min(sh.width, Math.round(v0.ax + dx)));
-              sh.height = Math.max(300, Math.min(4000, Math.round(v0.h - dy)));
-            });
-          H_('3', W, H,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
+              sh.params.apex_x = clamp(0, sh.width, snap(v0.ax + dx));
+              sh.height = clamp(300, 4000, snap(v0.h - dy));
+            },
+            () => (sh.params.apex_x != null ? sh.params.apex_x : Math.round(sh.width/2)) + '×0мм');
+          H_('3', W, H, () => sh.width,
+            (v0, dx) => { sh.width = clamp(300, 8000, snap(v0 + dx)); clampParams(); },
+            () => sh.width + '×' + sh.height + 'мм');
           break;
         }
         case 'trapezoid': {
           const lh = p.left_h != null ? p.left_h : H;
           const rh = p.right_h != null ? p.right_h : H;
           H_('TL', 0, H - lh,
-            () => ({ lh: lh }),
-            (v0, dx, dy) => { sh.params.left_h  = Math.max(50, Math.min(sh.height, Math.round(v0.lh - dy))); });
+            () => p.left_h != null ? p.left_h : sh.height,
+            (v0, dx, dy) => { sh.params.left_h = clamp(50, sh.height, snap(v0 - dy)); },
+            () => 'lh: ' + (sh.params.left_h != null ? sh.params.left_h : sh.height) + 'мм');
           H_('TR', W, H - rh,
-            () => ({ rh: rh, w: sh.width }),
+            () => ({ rh: p.right_h != null ? p.right_h : sh.height, w: sh.width }),
             (v0, dx, dy) => {
-              sh.params.right_h = Math.max(50, Math.min(sh.height, Math.round(v0.rh - dy)));
-              sh.width = Math.max(300, Math.min(8000, Math.round(v0.w + dx)));
-            });
-          H_('H', W / 2, H,
-            () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(300, Math.min(4000, Math.round(v0 + dy))); });
+              sh.params.right_h = clamp(50, sh.height, snap(v0.rh - dy));
+              sh.width = clamp(300, 8000, snap(v0.w + dx));
+            },
+            () => 'rh: ' + (sh.params.right_h != null ? sh.params.right_h : sh.height) + 'мм');
+          H_('H', W/2, H, () => sh.height,
+            (v0, dx, dy) => { sh.height = clamp(300, 4000, snap(v0 + dy)); clampParams(); },
+            () => 'H: ' + sh.height + 'мм');
           break;
         }
         case 'gothic': {
           const rise = p.arch_rise || 500;
           const offset = p.peak_offset || 0;
-          H_('▲', W / 2 + offset, 0,
-            () => ({ rise, offset }),
-            // Drag DOWN (+dy) → peak moves down → rise DECREASES.
-            // Drag UP (−dy) → peak moves up → rise INCREASES.
+          H_('▲', W/2 + offset, 0,
+            () => ({ rise: p.arch_rise || 500, offset: p.peak_offset || 0 }),
             (v0, dx, dy) => {
-              sh.params.arch_rise = Math.max(50, Math.min(sh.height - 200, Math.round(v0.rise - dy)));
-              sh.params.peak_offset = Math.max(-W / 2, Math.min(W / 2, Math.round(v0.offset + dx)));
-            });
-          H_('W', W, H / 2,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
-          H_('H', W / 2, H,
-            () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(rise + 200, Math.min(4000, Math.round(v0 + dy))); });
+              sh.params.arch_rise   = clamp(50, sh.height - 200, snap(v0.rise - dy));
+              sh.params.peak_offset = clamp(-sh.width / 2, sh.width / 2, snap(v0.offset + dx));
+            },
+            () => 'rise:' + (sh.params.arch_rise || 500) + ' off:' + (sh.params.peak_offset || 0));
+          H_('W', W, H/2, () => sh.width,
+            (v0, dx) => { sh.width = clamp(300, 8000, snap(v0 + dx)); clampParams(); },
+            () => 'W: ' + sh.width + 'мм');
+          H_('H', W/2, H, () => sh.height,
+            (v0, dx, dy) => { sh.height = clamp((sh.params.arch_rise || 500) + 200, 4000, snap(v0 + dy)); },
+            () => 'H: ' + sh.height + 'мм');
           break;
         }
-        case 'circle': {
-          // Handle is on the rightmost edge (W, H/2). Dragging right by dx px
-          // moves the right edge by dx mm; circle stays centered, so width
-          // (= diameter) grows by dx. Width = height = diameter.
-          H_('R', W, H / 2,
-            () => sh.width,
-            (v0, dx) => {
-              const newW = Math.max(300, Math.min(4000, Math.round(v0 + dx)));
-              sh.width = newW; sh.height = newW;
-            });
+        case 'circle':
+          H_('R', W, H/2, () => sh.width,
+            (v0, dx) => { const d = clamp(300, 4000, snap(v0 + dx)); sh.width = d; sh.height = d; },
+            () => 'D: ' + sh.width + 'мм');
           break;
-        }
-        case 'oval': {
-          // Handle 'a' on right edge — drag changes width (= 2a).
-          // Handle 'b' on bottom edge — drag changes height (= 2b).
-          // No ×2 multiplier: dragging the edge by dx mm moves the edge by dx mm.
-          H_('a', W, H / 2,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
-          H_('b', W / 2, H,
-            () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(300, Math.min(4000, Math.round(v0 + dy))); });
+        case 'oval':
+          H_('a', W, H/2, () => sh.width,
+            (v0, dx) => { sh.width = clamp(300, 8000, snap(v0 + dx)); },
+            () => 'a: ' + Math.round(sh.width / 2) + 'мм');
+          H_('b', W/2, H, () => sh.height,
+            (v0, dx, dy) => { sh.height = clamp(300, 4000, snap(v0 + dy)); },
+            () => 'b: ' + Math.round(sh.height / 2) + 'мм');
           break;
-        }
         case 'pentagon': {
           const peakH = p.peak_h || 300;
-          H_('▼', W / 2, 0,
-            () => peakH,
-            (v0, dx, dy) => { sh.params.peak_h = Math.max(50, Math.min(sh.height - 200, Math.round(v0 - dy))); });
-          H_('W', W, H / 2,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
-          H_('H', W / 2, H,
-            () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(peakH + 200, Math.min(4000, Math.round(v0 + dy))); });
+          H_('▲', W/2, 0,
+            () => p.peak_h || 300,
+            (v0, dx, dy) => { sh.params.peak_h = clamp(50, sh.height - 200, snap(v0 - dy)); },
+            () => 'peak: ' + (sh.params.peak_h || 300) + 'мм');
+          H_('W', W, H/2, () => sh.width,
+            (v0, dx) => { sh.width = clamp(300, 8000, snap(v0 + dx)); clampParams(); },
+            () => 'W: ' + sh.width + 'мм');
+          H_('H', W/2, H, () => sh.height,
+            (v0, dx, dy) => { sh.height = clamp((sh.params.peak_h || 300) + 200, 4000, snap(v0 + dy)); },
+            () => 'H: ' + sh.height + 'мм');
           break;
         }
         case 'hexagon': {
           const sideH = p.side_h || H * 0.25;
           H_('s', 0, H - sideH,
-            () => sideH,
-            (v0, dx, dy) => { sh.params.side_h = Math.max(50, Math.min(sh.height / 2 - 50, Math.round(v0 - dy))); });
-          H_('W', W, H / 2,
-            () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
-          H_('H', W / 2, H,
-            () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(300, Math.min(4000, Math.round(v0 + dy))); });
+            () => p.side_h != null ? p.side_h : (sh.height * 0.25),
+            (v0, dx, dy) => { sh.params.side_h = clamp(50, sh.height / 2 - 50, snap(v0 - dy)); },
+            () => 'side: ' + (sh.params.side_h != null ? sh.params.side_h : Math.round(sh.height * 0.25)) + 'мм');
+          H_('W', W, H/2, () => sh.width,
+            (v0, dx) => { sh.width = clamp(300, 8000, snap(v0 + dx)); },
+            () => 'W: ' + sh.width + 'мм');
+          H_('H', W/2, H, () => sh.height,
+            (v0, dx, dy) => { sh.height = clamp(400, 4000, snap(v0 + dy)); clampParams(); },
+            () => 'H: ' + sh.height + 'мм');
           break;
         }
-        case 'quarter_circle': {
+        case 'quarter_circle':
           H_('R', Math.min(W, H), H,
             () => Math.min(sh.width, sh.height),
-            (v0, dx) => {
-              const r = Math.max(300, Math.min(4000, Math.round(v0 + dx)));
-              sh.width = r; sh.height = r;
-            });
+            (v0, dx) => { const r = clamp(300, 4000, snap(v0 + dx)); sh.width = r; sh.height = r; },
+            () => 'R: ' + Math.min(sh.width, sh.height) + 'мм');
           break;
-        }
         case 'polygon': {
           const verts = p.vertices || [];
           verts.forEach((v, i) => {
             H_(String(i + 1), v[0], v[1],
               () => [v[0], v[1]],
               (v0, dx, dy) => {
-                v[0] = Math.max(0, Math.min(sh.width, Math.round(v0[0] + dx)));
-                v[1] = Math.max(0, Math.min(sh.height, Math.round(v0[1] + dy)));
-              });
+                v[0] = clamp(0, sh.width,  snap(v0[0] + dx));
+                v[1] = clamp(0, sh.height, snap(v0[1] + dy));
+              },
+              () => 'v' + (i + 1) + ': ' + v[0] + '×' + v[1]);
           });
           break;
         }
       }
       return out;
     }
-    function drawDims(svg, sh, toScreen) {
-      const W = sh.width, H = sh.height;
-      const NS = 'http://www.w3.org/2000/svg';
-      function ln(x1, y1, x2, y2) {
-        const e = document.createElementNS(NS, 'line');
-        e.setAttribute('x1', x1); e.setAttribute('y1', y1); e.setAttribute('x2', x2); e.setAttribute('y2', y2);
-        e.setAttribute('stroke', '#9a9a9a'); e.setAttribute('stroke-width', '0.5');
-        e.setAttribute('stroke-dasharray', '3,2');
-        svg.appendChild(e);
-      }
-      function txt(x, y, t, anchor = 'middle') {
-        const e = document.createElementNS(NS, 'text');
-        e.setAttribute('x', x); e.setAttribute('y', y); e.setAttribute('text-anchor', anchor);
-        e.setAttribute('font-family', 'JetBrains Mono, monospace');
-        e.setAttribute('font-size', '10');
-        e.setAttribute('fill', '#7a756c');
-        e.setAttribute('font-weight', '600');
-        e.textContent = t;
-        svg.appendChild(e);
-      }
-      // Top width dim
-      const [tx1, ty1] = toScreen(0, 0);
-      const [tx2, ty2] = toScreen(W, 0);
-      ln(tx1, ty1 - 12, tx2, ty1 - 12);
-      txt((tx1 + tx2) / 2, ty1 - 16, W + ' мм');
-      // Right height dim
-      const [rx1, ry1] = toScreen(W, 0);
-      const [rx2, ry2] = toScreen(W, H);
-      ln(rx1 + 12, ry1, rx2 + 12, ry2);
-      txt(rx1 + 16, (ry1 + ry2) / 2 + 3, H + ' мм', 'start');
-    }
-    function computeMetrics(sh) {
+
+    // ── perim & area metrics (for live display) ──
+    function computeMetrics() {
       const W = sh.width, H = sh.height;
       const p = sh.params || {};
       const PI = Math.PI;
-      function ellipsePerim(a, b) {
-        const h = ((a - b) / (a + b)) ** 2;
-        return PI * (a + b) * (1 + 3 * h / (10 + Math.sqrt(4 - 3 * h)));
-      }
+      function ellipsePerim(a, b) { const h = ((a - b) / (a + b)) ** 2; return PI * (a + b) * (1 + 3 * h / (10 + Math.sqrt(4 - 3 * h))); }
       let perim = 0, area = 0;
       switch (sh.kind) {
-        case 'rectangle': perim = 2 * (W + H); area = W * H; break;
-        case 'arched': {
-          const rise = p.arch_rise || 400, rectH = H - rise;
-          perim = 2 * rectH + W + ellipsePerim(W / 2, rise) / 2;
-          area = W * rectH + PI * (W / 2) * rise / 2;
-          break;
-        }
-        case 'half_circle': {
-          const r = W / 2;
-          perim = W + PI * r;
-          area = PI * r * r / 2;
-          break;
-        }
-        case 'triangle': {
-          const ax = p.apex_x != null ? p.apex_x : W / 2;
-          perim = W + Math.hypot(ax, H) + Math.hypot(W - ax, H);
-          area = 0.5 * W * H;
-          break;
-        }
-        case 'trapezoid': {
-          // lh, rh = heights of left/right sides (matches server/shapes.js convention).
-          const lh = p.left_h != null ? p.left_h : H;
-          const rh = p.right_h != null ? p.right_h : H;
-          const topLen = Math.hypot(W, lh - rh);
-          perim = lh + W + rh + topLen;
-          area = 0.5 * W * (lh + rh);
-          break;
-        }
-        case 'gothic': {
-          const rise = p.arch_rise || 500, rectH = H - rise;
-          const arcSeg = Math.hypot(W / 2, rise) * 1.6;
-          perim = 2 * rectH + W + arcSeg * 2;
-          area = W * rectH + 0.5 * W * rise * 0.85;
-          break;
-        }
-        case 'circle': {
-          const r = W / 2; perim = 2 * PI * r; area = PI * r * r; break;
-        }
-        case 'oval': {
-          const a = W / 2, b = H / 2;
-          perim = ellipsePerim(a, b); area = PI * a * b;
-          break;
-        }
-        case 'pentagon': {
-          const peakH = p.peak_h || 300, rectH = H - peakH;
-          const sideLen = Math.hypot(W / 2, peakH);
-          perim = 2 * rectH + W + 2 * sideLen;
-          area = W * rectH + 0.5 * W * peakH;
-          break;
-        }
-        case 'hexagon': {
-          const sideH = p.side_h || H * 0.25, midH = H - 2 * sideH;
-          const sideLen = Math.hypot(W / 2, sideH);
-          perim = 2 * midH + 4 * sideLen;
-          area = W * midH + W * sideH;
-          break;
-        }
-        case 'quarter_circle': {
-          const r = Math.min(W, H);
-          perim = 2 * r + PI * r / 2;
-          area = PI * r * r / 4;
-          break;
-        }
-        case 'polygon': {
-          const verts = p.vertices || [];
-          for (let i = 0; i < verts.length; i++) {
-            const a = verts[i], b = verts[(i + 1) % verts.length];
-            perim += Math.hypot(b[0] - a[0], b[1] - a[1]);
-            area += a[0] * b[1] - b[0] * a[1];
-          }
-          area = Math.abs(area) / 2;
-          break;
-        }
+        case 'rectangle':   perim = 2 * (W + H); area = W * H; break;
+        case 'arched':      { const rise = p.arch_rise || 400, rectH = H - rise; perim = 2 * rectH + W + ellipsePerim(W/2, rise) / 2; area = W * rectH + PI * (W/2) * rise / 2; break; }
+        case 'half_circle': { const r = W/2; perim = W + PI * r; area = PI * r * r / 2; break; }
+        case 'triangle':    { const ax = p.apex_x != null ? p.apex_x : W/2; perim = W + Math.hypot(ax, H) + Math.hypot(W - ax, H); area = 0.5 * W * H; break; }
+        case 'trapezoid':   { const lh = p.left_h != null ? p.left_h : H; const rh = p.right_h != null ? p.right_h : H; const topLen = Math.hypot(W, lh - rh); perim = lh + W + rh + topLen; area = 0.5 * W * (lh + rh); break; }
+        case 'gothic':      { const rise = p.arch_rise || 500, rectH = H - rise; const arcSeg = Math.hypot(W/2, rise) * 1.6; perim = 2 * rectH + W + arcSeg * 2; area = W * rectH + 0.5 * W * rise * 0.85; break; }
+        case 'circle':      { const r = W/2; perim = 2 * PI * r; area = PI * r * r; break; }
+        case 'oval':        { const a = W/2, b = H/2; perim = ellipsePerim(a, b); area = PI * a * b; break; }
+        case 'pentagon':    { const peakH = p.peak_h || 300, rectH = H - peakH; const sideLen = Math.hypot(W/2, peakH); perim = 2 * rectH + W + 2 * sideLen; area = W * rectH + 0.5 * W * peakH; break; }
+        case 'hexagon':     { const sideH = p.side_h || H * 0.25, midH = H - 2 * sideH; const sideLen = Math.hypot(W/2, sideH); perim = 2 * midH + 4 * sideLen; area = W * midH + W * sideH; break; }
+        case 'quarter_circle': { const r = Math.min(W, H); perim = 2 * r + PI * r / 2; area = PI * r * r / 4; break; }
+        case 'polygon':     { const verts = p.vertices || []; for (let i = 0; i < verts.length; i++) { const a = verts[i], b = verts[(i+1) % verts.length]; perim += Math.hypot(b[0] - a[0], b[1] - a[1]); area += a[0] * b[1] - b[0] * a[1]; } area = Math.abs(area) / 2; break; }
       }
-      return { perim: perim / 1000, area: area / 1e6 }; // m, m²
+      return { perim: perim / 1000, area: area / 1e6 };
+    }
+
+    // ── DOM refs (for partial updates on drag) ──
+    let svgRoot = null, gridG = null, dimsG = null, pathEl = null, handlesG = null;
+    let metricsEl = null, sizeTextEl = null, perimAreaEl = null;
+    const inputElements = {};
+    let lastScaleX = 1, lastScaleY = 1;  // saved so drag can convert px→mm without recomputing layout
+
+    // ── canvas constants ──
+    const CANVAS_W = Math.min(window.innerWidth - 60, 360);
+    const CANVAS_H = 320;
+    const PAD = 30;  // for dim labels around the bbox
+
+    // ── full render of the SVG (called when shape kind changes or full repaint needed) ──
+    function renderSvg() {
+      if (!svgRoot) return;
+      clear(gridG); clear(dimsG); clear(handlesG);
+      const bbox = shapeBbox();
+      const bboxW = bbox.x1 - bbox.x0;
+      const bboxH = bbox.y1 - bbox.y0;
+      const innerMaxW = CANVAS_W - PAD * 2;
+      const innerMaxH = CANVAS_H - PAD * 2;
+      let drawW, drawH;
+      if (innerMaxW / innerMaxH > bboxW / bboxH) { drawH = innerMaxH; drawW = drawH * (bboxW / bboxH); }
+      else { drawW = innerMaxW; drawH = drawW * (bboxH / bboxW); }
+      const offsetX = (CANVAS_W - drawW) / 2 - bbox.x0 * (drawW / bboxW);
+      const offsetY = (CANVAS_H - drawH) / 2 - bbox.y0 * (drawH / bboxH);
+      const scaleX = drawW / bboxW;
+      const scaleY = drawH / bboxH;
+      lastScaleX = scaleX; lastScaleY = scaleY;
+      const toScreen = (xMm, yMm) => [offsetX + xMm * scaleX, offsetY + yMm * scaleY];
+
+      // Grid (100mm step + 500mm darker), confined to bbox
+      const gridStep = 100;
+      for (let xMm = 0; xMm <= sh.width; xMm += gridStep) {
+        if (xMm < bbox.x0 || xMm > bbox.x1) continue;
+        const [x1] = toScreen(xMm, bbox.y0);
+        const [, y2] = toScreen(0, bbox.y1);
+        gridG.appendChild(ns('line', { x1, y1: toScreen(0, bbox.y0)[1], x2: x1, y2, stroke: xMm % 500 === 0 ? '#cfc7b5' : '#e8e1d0', 'stroke-width': '0.5' }));
+      }
+      for (let yMm = 0; yMm <= sh.height; yMm += gridStep) {
+        if (yMm < bbox.y0 || yMm > bbox.y1) continue;
+        const [x1] = toScreen(bbox.x0, 0);
+        const [x2] = toScreen(bbox.x1, 0);
+        const [, y1] = toScreen(0, yMm);
+        gridG.appendChild(ns('line', { x1, y1, x2, y2: y1, stroke: yMm % 500 === 0 ? '#cfc7b5' : '#e8e1d0', 'stroke-width': '0.5' }));
+      }
+
+      // Path
+      pathEl.setAttribute('d', computePath(toScreen, scaleX, scaleY));
+
+      // Dimension lines (top width, right height)
+      const [tx1, ty1] = toScreen(bbox.x0, bbox.y0);
+      const [tx2] = toScreen(bbox.x1, bbox.y0);
+      dimsG.appendChild(ns('line', { x1: tx1, y1: ty1 - 12, x2: tx2, y2: ty1 - 12, stroke: '#9a9a9a', 'stroke-width': '0.5', 'stroke-dasharray': '3,2' }));
+      const wText = ns('text', { x: (tx1 + tx2) / 2, y: ty1 - 16, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono,monospace', 'font-size': '10', fill: '#7a756c', 'font-weight': '600' });
+      wText.textContent = sh.width + ' мм'; dimsG.appendChild(wText);
+      const [rx1, ry1] = toScreen(bbox.x1, bbox.y0);
+      const [, ry2] = toScreen(bbox.x1, bbox.y1);
+      dimsG.appendChild(ns('line', { x1: rx1 + 12, y1: ry1, x2: rx1 + 12, y2: ry2, stroke: '#9a9a9a', 'stroke-width': '0.5', 'stroke-dasharray': '3,2' }));
+      const hText = ns('text', { x: rx1 + 16, y: (ry1 + ry2) / 2 + 3, 'text-anchor': 'start', 'font-family': 'JetBrains Mono,monospace', 'font-size': '10', fill: '#7a756c', 'font-weight': '600' });
+      hText.textContent = sh.height + ' мм'; dimsG.appendChild(hText);
+
+      // Handles (circle + label inside + value badge below)
+      const handles = buildHandles();
+      handles.forEach((hd) => {
+        const [hx, hy] = toScreen(hd.xMm, hd.yMm);
+        const c = ns('circle', { cx: hx, cy: hy, r: 14, fill: '#fff', stroke: '#b56b3a', 'stroke-width': '2.5', style: 'cursor:grab;touch-action:none' });
+        const lab = ns('text', { x: hx, y: hy + 3.5, 'text-anchor': 'middle', 'font-family': 'Inter,sans-serif', 'font-size': '9', 'font-weight': '700', fill: '#b56b3a', style: 'pointer-events:none;user-select:none' });
+        lab.textContent = hd.label;
+        // Value label below — shows the current mm position/value
+        const txt = (hd.valueLabel ? hd.valueLabel() : '');
+        const labW = Math.max(54, txt.length * 5.5 + 8);
+        const valBg = ns('rect', { x: hx - labW / 2, y: hy + 20, width: labW, height: 13, rx: 3, fill: 'rgba(255,255,255,0.95)', stroke: '#b56b3a', 'stroke-width': '0.6' });
+        const valText = ns('text', { x: hx, y: hy + 29, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono,monospace', 'font-size': '9', 'font-weight': '600', fill: '#3a2a1a', style: 'pointer-events:none' });
+        valText.textContent = txt;
+        handlesG.appendChild(c);
+        handlesG.appendChild(lab);
+        handlesG.appendChild(valBg);
+        handlesG.appendChild(valText);
+        // Drag interaction
+        let startClient = null, startVal = null;
+        function onDown(ev) {
+          ev.preventDefault(); ev.stopPropagation();
+          const t = (ev.touches && ev.touches[0]) || ev;
+          startClient = { x: t.clientX, y: t.clientY };
+          startVal = hd.getValue();
+          c.setAttribute('r', '17');
+          window.addEventListener('mousemove', onMove);
+          window.addEventListener('mouseup', onUp);
+          window.addEventListener('touchmove', onMove, { passive: false });
+          window.addEventListener('touchend', onUp);
+          window.addEventListener('touchcancel', onUp);
+        }
+        function onMove(ev) {
+          ev.preventDefault?.();
+          const t = (ev.touches && ev.touches[0]) || ev;
+          const dxMm = (t.clientX - startClient.x) / lastScaleX;
+          const dyMm = (t.clientY - startClient.y) / lastScaleY;
+          hd.setValue(startVal, dxMm, dyMm);
+          renderSvg();
+          updateMetricsAndInputs();
+        }
+        function onUp() {
+          c.setAttribute('r', '14');
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+          window.removeEventListener('touchmove', onMove);
+          window.removeEventListener('touchend', onUp);
+          window.removeEventListener('touchcancel', onUp);
+        }
+        c.addEventListener('mousedown', onDown);
+        c.addEventListener('touchstart', onDown, { passive: false });
+      });
+    }
+    function updateMetricsAndInputs() {
+      if (sizeTextEl) sizeTextEl.textContent = `Размер: ${sh.width} × ${sh.height} мм`;
+      if (perimAreaEl) {
+        const m = computeMetrics();
+        perimAreaEl.textContent = `${m.area.toFixed(2)} м² · ${m.perim.toFixed(2)} м`;
+      }
+      if (inputElements.width)  inputElements.width.value = sh.width;
+      if (inputElements.height) inputElements.height.value = sh.height;
+      for (const k in inputElements) {
+        if (k === 'width' || k === 'height') continue;
+        if (sh.params[k] != null) inputElements[k].value = sh.params[k];
+      }
+    }
+
+    function paint() {
+      clear(root);
+      root.appendChild(bar('Редактор формы', { back: () => go('edit-item') }));
+      const body = h('div', { class: 'body no-tabs' });
+      root.appendChild(body);
+
+      // Form picker
+      body.appendChild(h('div', { class: 'section-label' }, 'Форма'));
+      const kinds = ['rectangle', 'arched', 'half_circle', 'triangle', 'trapezoid', 'gothic', 'circle', 'oval', 'pentagon', 'hexagon', 'quarter_circle', 'polygon'];
+      body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:14px' },
+        h('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px' },
+          kinds.map(k => {
+            const isSel = sh.kind === k;
+            return h('button', {
+              onClick: () => switchKind(k),
+              style: `padding:8px 4px;border-radius:8px;border:1.5px solid ${isSel ? 'var(--accent)' : 'var(--rule)'};background:${isSel ? 'var(--accent)' : '#fff'};color:${isSel ? '#fff' : 'var(--text)'};font-size:10.5px;font-weight:${isSel ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px`,
+            }, [
+              h('span', { style: 'font-size:18px;line-height:1' }, SHAPE_ICONS[k] || '◌'),
+              h('span', { style: 'font-size:10px' }, SHAPE_NAMES[k]),
+            ]);
+          }))));
+
+      // Editor canvas
+      body.appendChild(h('div', { class: 'section-label' }, 'Перетаскивай точки (шаг 10 мм)'));
+      const svgWrap = h('div', { class: 'card pad', style: 'margin-bottom:14px;background:#faf7f1' });
+      svgRoot = ns('svg', { width: CANVAS_W, height: CANVAS_H, viewBox: `0 0 ${CANVAS_W} ${CANVAS_H}`, style: 'display:block;background:#fff;border-radius:8px;border:1px solid var(--rule)' });
+      gridG = ns('g'); svgRoot.appendChild(gridG);
+      dimsG = ns('g'); svgRoot.appendChild(dimsG);
+      pathEl = ns('path', { fill: 'rgba(180, 220, 235, 0.30)', stroke: '#b56b3a', 'stroke-width': '2.5' });
+      svgRoot.appendChild(pathEl);
+      handlesG = ns('g'); svgRoot.appendChild(handlesG);
+      svgWrap.appendChild(svgRoot);
+      sizeTextEl  = h('div', {}, '');
+      perimAreaEl = h('div', { style: 'color:var(--accent)' }, '');
+      svgWrap.appendChild(h('div', { style: 'display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;color:var(--text);margin-top:10px;padding-top:10px;border-top:1px dashed var(--rule)' }, [sizeTextEl, perimAreaEl]));
+      body.appendChild(svgWrap);
+
+      // Numeric inputs
+      body.appendChild(h('div', { class: 'section-label' }, 'Точные значения'));
+      const inputsCard = h('div', { class: 'card pad', style: 'margin-bottom:14px;display:flex;flex-direction:column;gap:8px' });
+      // clear inputElements
+      for (const k in inputElements) delete inputElements[k];
+      function num(label, key, getter, setter, min, max) {
+        const inp = h('input', { type: 'number', value: getter(), min, max, step: 10, style: 'flex:1;padding:7px 10px;border:1px solid var(--rule);border-radius:7px;font-family:var(--mono);font-size:13px;text-align:right' });
+        inp.addEventListener('change', () => { setter(snap(parseFloat(inp.value) || 0)); clampParams(); renderSvg(); updateMetricsAndInputs(); });
+        inputElements[key] = inp;
+        return h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
+          h('span', { style: 'flex:1;font-size:12.5px;color:var(--muted)' }, label), inp, h('span', { style: 'font-size:11px;color:var(--muted)' }, 'мм'),
+        ]);
+      }
+      inputsCard.appendChild(num('Ширина (W)',  'width',  () => sh.width,  v => sh.width  = clamp(300, 8000, v), 300, 8000));
+      inputsCard.appendChild(num('Высота (H)',  'height', () => sh.height, v => sh.height = clamp(300, 4000, v), 300, 4000));
+      // Per-shape params
+      const sRow = state.cache.shapeTypes.find(s => s.code === sh.kind);
+      let schemaParams = {};
+      try { schemaParams = JSON.parse(sRow?.params_schema || '{}'); } catch {}
+      Object.keys(schemaParams).forEach(k => {
+        if (k === 'vertices' || k === 'panels' || k === 'angle') return;
+        if (sh.params[k] == null) sh.params[k] = schemaParams[k];
+        inputsCard.appendChild(num(PARAM_LABELS[k] || k, k, () => sh.params[k] || 0, v => sh.params[k] = v, 0, 4000));
+      });
+      // Polygon — vertex add/remove
+      if (sh.kind === 'polygon') {
+        const verts = sh.params.vertices || [];
+        inputsCard.appendChild(h('div', { style: 'font-size:12px;color:var(--muted);margin-top:6px;padding-top:6px;border-top:1px dashed var(--rule)' }, `Вершин: ${verts.length}`));
+        inputsCard.appendChild(h('div', { class: 'btn-row' }, [
+          h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => {
+            const last = verts[verts.length - 1], first = verts[0];
+            verts.push([(last[0] + first[0]) / 2, (last[1] + first[1]) / 2]);
+            renderSvg(); updateMetricsAndInputs();
+          } }, '+ Вершина'),
+          h('button', { class: 'btn btn-secondary', style: 'flex:1', disabled: verts.length <= 3, onClick: () => { if (verts.length > 3) { verts.pop(); renderSvg(); updateMetricsAndInputs(); } } }, '− Вершина'),
+        ]));
+      }
+      // Quick info: glass factor / bend fee
+      if (sRow) {
+        inputsCard.appendChild(h('div', { style: 'font-size:11px;color:var(--accent);font-family:var(--mono);text-align:center;padding-top:6px;border-top:1px dashed var(--rule);margin-top:4px' },
+          `Стекло ×${sRow.glass_factor}` + (sRow.bend_fee > 0 ? ` · Гибка ${fmtNum(sRow.bend_fee)} ₸` : '')));
+      }
+      body.appendChild(inputsCard);
+
+      // Save / Cancel
+      body.appendChild(h('div', { class: 'btn-row' }, [
+        h('button', { class: 'btn btn-secondary', style: 'flex:1', onClick: () => go('edit-item') }, 'Отмена'),
+        h('button', { class: 'btn btn-accent', style: 'flex:1.4', onClick: () => {
+          item.layout.width = Math.round(sh.width);
+          item.layout.height = Math.round(sh.height);
+          state.lastResult = null;
+          toast('Форма сохранена');
+          go('edit-item');
+        } }, 'Сохранить'),
+      ]));
+
+      renderSvg();
+      updateMetricsAndInputs();
     }
 
     paint();
