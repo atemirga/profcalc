@@ -725,7 +725,7 @@
           ]),
         ]),
       ]);
-      card.querySelector('div > div').appendChild(window.WindowSchema({ w: 76, h: 56, layout: it.layout, showDims: false }));
+      card.querySelector('div > div').appendChild(window.WindowSchema({ w: 76, h: 56, layout: it.layout, shape: it.shape, showDims: false }));
       card.addEventListener('click', () => { state.activeIdx = idx; go('edit-item'); });
       return card;
     }
@@ -1061,7 +1061,7 @@
         const canvasW = Math.round(innerW + padX);
         const canvasH = Math.round(innerH + padY);
         drawWrap.appendChild(window.WindowSchema({
-          w: canvasW, h: canvasH, layout: item.layout, showDims: true,
+          w: canvasW, h: canvasH, layout: item.layout, shape: item.shape, showDims: true,
           highlight: state.selected ? `${state.selected.ri}:${state.selected.ci}` : null,
           onPick: (ri, ci) => { state.selected = { ri, ci }; openSectionSheet(ri, ci); paint(); },
         }));
@@ -2548,8 +2548,19 @@
       const sysObj = state.cache.systems.find(s => s.id === it.systemId);
       const colorObj = state.cache.colors.find(c => c.id === it.colorId);
       const colorHex = colorObj?.hex || '#ffffff';
-      const aspectRatio = (it.layout?.width || 1500) / (it.layout?.height || 1400);
-      // Aspect-aware sizing — компенсируем padding WindowSchema (showDims=false → 12×4 = 48)
+      // Aspect-aware sizing — для не-прямоугольных форм используем bbox формы
+      // (полукруг → W×W/2, круг → W×W) чтобы AR-overlay не растягивался.
+      let arW = it.layout?.width || 1500;
+      let arH = it.layout?.height || 1400;
+      if (it.shape && it.shape.kind && it.shape.kind !== 'rectangle') {
+        const sk = it.shape.kind, shW = it.shape.width || arW, shH = it.shape.height || arH;
+        if (sk === 'half_circle') { arW = shW; arH = shW / 2; }
+        else if (sk === 'circle')      { arW = shW; arH = shW; }
+        else if (sk === 'quarter_circle') { const r = Math.min(shW, shH); arW = r; arH = r; }
+        else { arW = shW; arH = shH; }
+      }
+      const aspectRatio = arW / arH;
+      // Компенсируем padding WindowSchema (showDims=false → 12×4 = 48)
       // чтобы inner-область рисунка соответствовала реальной пропорции окна.
       const vh = window.innerHeight, vw = window.innerWidth;
       const maxOvW = vw * 0.85;
@@ -2568,7 +2579,7 @@
       // Phase AR-2: frame/sash — fully opaque RAL color (frame is solid, NOT transparent).
       // Only the glass is semi-transparent so the user sees through to the real wall.
       overlaySvg = window.WindowSchema({
-        w: overlayW, h: overlayH, layout: it.layout, showDims: false,
+        w: overlayW, h: overlayH, layout: it.layout, shape: it.shape, showDims: false,
         frameColor: colorHex,
         sashColor: colorHex,
         glassColor: `rgba(255, 255, 255, ${glassOpacity})`,
@@ -2807,7 +2818,7 @@
           ]),
         ]),
       ]);
-      card.querySelector('div > div').appendChild(window.WindowSchema({ w: 76, h: 56, layout: it.layout, showDims: false }));
+      card.querySelector('div > div').appendChild(window.WindowSchema({ w: 76, h: 56, layout: it.layout, shape: it.shape, showDims: false }));
       list.appendChild(card);
     });
     body.appendChild(list);

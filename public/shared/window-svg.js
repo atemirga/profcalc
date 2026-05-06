@@ -132,9 +132,113 @@
    * @param {string|number|null} [opts.highlight] — id of section to highlight (for editor) — `${rowIdx}:${colIdx}`
    * @param {function} [opts.onPick] — callback(rowIdx, colIdx) when user clicks a section
    */
+  // ── Shape-path generator (for non-rectangular outer contours) ──
+  // Returns an SVG `d` attribute string in screen coordinates, given a shape
+  // descriptor and a (toScreen, scaleX, scaleY) transform.
+  // Supports: rectangle, arched, half_circle, triangle, trapezoid, gothic,
+  // circle, oval, pentagon, hexagon, quarter_circle, polygon.
+  function shapePathString(shape, toScreen, scaleX, scaleY) {
+    if (!shape || !shape.kind || shape.kind === 'rectangle') {
+      const W = shape?.width || 1500;
+      const H = shape?.height || 1400;
+      const [x1, y1] = toScreen(0, 0); const [x2, y2] = toScreen(W, H);
+      return `M ${x1} ${y1} L ${x2} ${y1} L ${x2} ${y2} L ${x1} ${y2} Z`;
+    }
+    const W = shape.width, H = shape.height, p = shape.params || {};
+    switch (shape.kind) {
+      case 'arched': {
+        const rise = p.arch_rise || 400, rectH = H - rise;
+        const [x1, y1] = toScreen(0, H);
+        const [x2, y2] = toScreen(0, rectH);
+        const [x3, y3] = toScreen(W, rectH);
+        const [x4, y4] = toScreen(W, H);
+        const rxPx = (W / 2) * scaleX, ryPx = rise * scaleY;
+        return `M ${x1} ${y1} L ${x2} ${y2} A ${rxPx} ${ryPx} 0 0 1 ${x3} ${y3} L ${x4} ${y4} Z`;
+      }
+      case 'half_circle': {
+        const r = W / 2;
+        const [x1, y1] = toScreen(0, r);
+        const [x2, y2] = toScreen(W, r);
+        const rxPx = r * scaleX, ryPx = r * scaleY;
+        return `M ${x1} ${y1} A ${rxPx} ${ryPx} 0 0 1 ${x2} ${y2} Z`;
+      }
+      case 'triangle': {
+        const ax = p.apex_x != null ? p.apex_x : W / 2;
+        const [x1, y1] = toScreen(0, H);
+        const [x2, y2] = toScreen(ax, 0);
+        const [x3, y3] = toScreen(W, H);
+        return `M ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} Z`;
+      }
+      case 'trapezoid': {
+        const lh = p.left_h != null ? p.left_h : H;
+        const rh = p.right_h != null ? p.right_h : H;
+        const [x1, y1] = toScreen(0, H - lh);
+        const [x2, y2] = toScreen(W, H - rh);
+        const [x3, y3] = toScreen(W, H);
+        const [x4, y4] = toScreen(0, H);
+        return `M ${x1} ${y1} L ${x2} ${y2} L ${x3} ${y3} L ${x4} ${y4} Z`;
+      }
+      case 'gothic': {
+        const rise = p.arch_rise || 500, offset = p.peak_offset || 0, rectH = H - rise;
+        const [x1, y1] = toScreen(0, H);
+        const [x2, y2] = toScreen(0, rectH);
+        const [px, py] = toScreen(W / 2 + offset, 0);
+        const [x4, y4] = toScreen(W, rectH);
+        const [x5, y5] = toScreen(W, H);
+        const [c1x, c1y] = toScreen(W / 4, 0);
+        const [c2x, c2y] = toScreen(3 * W / 4, 0);
+        return `M ${x1} ${y1} L ${x2} ${y2} Q ${c1x} ${c1y} ${px} ${py} Q ${c2x} ${c2y} ${x4} ${y4} L ${x5} ${y5} Z`;
+      }
+      case 'circle': {
+        const r = W / 2;
+        const [cx, cy] = toScreen(W / 2, H / 2);
+        const rPx = r * scaleX;
+        return `M ${cx - rPx} ${cy} A ${rPx} ${rPx} 0 0 1 ${cx + rPx} ${cy} A ${rPx} ${rPx} 0 0 1 ${cx - rPx} ${cy} Z`;
+      }
+      case 'oval': {
+        const a = W / 2, b = H / 2;
+        const [cx, cy] = toScreen(W / 2, H / 2);
+        const aPx = a * scaleX, bPx = b * scaleY;
+        return `M ${cx - aPx} ${cy} A ${aPx} ${bPx} 0 0 1 ${cx + aPx} ${cy} A ${aPx} ${bPx} 0 0 1 ${cx - aPx} ${cy} Z`;
+      }
+      case 'pentagon': {
+        const peakH = p.peak_h || 300, rectH = H - peakH;
+        const pts = [[0, H], [0, rectH], [W / 2, 0], [W, rectH], [W, H]];
+        return 'M ' + pts.map(pt => toScreen(...pt).join(' ')).join(' L ') + ' Z';
+      }
+      case 'hexagon': {
+        const sideH = p.side_h || H * 0.25;
+        const pts = [[0, H - sideH], [W / 2, H], [W, H - sideH], [W, sideH], [W / 2, 0], [0, sideH]];
+        return 'M ' + pts.map(pt => toScreen(...pt).join(' ')).join(' L ') + ' Z';
+      }
+      case 'quarter_circle': {
+        const r = Math.min(W, H);
+        const [x1, y1] = toScreen(0, H);
+        const [x2, y2] = toScreen(0, H - r);
+        const [x3, y3] = toScreen(r, H);
+        const rxPx = r * scaleX, ryPx = r * scaleY;
+        return `M ${x1} ${y1} L ${x2} ${y2} A ${rxPx} ${ryPx} 0 0 1 ${x3} ${y3} Z`;
+      }
+      case 'polygon': {
+        const verts = p.vertices || [[0, 0], [W, 0], [W, H], [0, H]];
+        return 'M ' + verts.map(v => toScreen(...v).join(' ')).join(' L ') + ' Z';
+      }
+    }
+    return '';
+  }
+  // Bounding-box of a shape (so canvas can fit even non-rectangular forms)
+  function shapeBbox(shape) {
+    const W = shape.width || 1500, H = shape.height || 1400;
+    if (!shape.kind || shape.kind === 'rectangle') return { x0: 0, y0: 0, x1: W, y1: H };
+    if (shape.kind === 'half_circle') return { x0: 0, y0: 0, x1: W, y1: W / 2 };
+    if (shape.kind === 'circle') return { x0: 0, y0: 0, x1: W, y1: W };
+    if (shape.kind === 'quarter_circle') { const r = Math.min(W, H); return { x0: 0, y0: 0, x1: r, y1: r }; }
+    return { x0: 0, y0: 0, x1: W, y1: H };
+  }
+
   function WindowSchema(opts = {}) {
     let {
-      w = 280, h = 200, layout,
+      w = 280, h = 200, layout, shape,
       sections, w_mm = 2100, h_mm = 1400,
       showDims = true,
       frameColor = '#3a3a3a', sashColor = '#5a5a5a',
@@ -164,7 +268,66 @@
 
     const svg = el('svg', { width: w, height: h, viewBox: `0 0 ${w} ${h}`, style: 'display:block;background:transparent' });
 
-    // outer frame
+    // ── Non-rectangular shape: render outline + glass via SVG path, skip
+    // section-grid (sections in arched/circle/triangle windows are always FIX
+    // glass behind a single shaped frame).
+    const isNonRect = shape && shape.kind && shape.kind !== 'rectangle';
+    if (isNonRect) {
+      const bbox = shapeBbox(shape);
+      const bboxW = bbox.x1 - bbox.x0;
+      const bboxH = bbox.y1 - bbox.y0;
+      const ar = bboxW / bboxH;
+      let drawW, drawH;
+      if (innerW / innerH > ar) { drawH = innerH; drawW = drawH * ar; }
+      else { drawW = innerW; drawH = drawW / ar; }
+      const ox = padLeft + (innerW - drawW) / 2 - bbox.x0 * (drawW / bboxW);
+      const oy = padTop  + (innerH - drawH) / 2 - bbox.y0 * (drawH / bboxH);
+      const sx = drawW / bboxW, sy = drawH / bboxH;
+      const ts = (xMm, yMm) => [ox + xMm * sx, oy + yMm * sy];
+      // Outer frame outline
+      const dOuter = shapePathString(shape, ts, sx, sy);
+      svg.appendChild(el('path', { d: dOuter, fill: frameColor, stroke: 'rgba(0,0,0,0.25)', 'stroke-width': 0.5 }));
+      // Glass (slightly inset by ~5% — visual approximation of frame thickness)
+      const insetMm = Math.min(50, Math.min(shape.width, shape.height) * 0.04);
+      // For inset, construct shrunken shape (works for most: just shrink width/height with same params clipped)
+      const insetShape = {
+        kind: shape.kind,
+        width: Math.max(50, shape.width - insetMm * 2),
+        height: Math.max(50, shape.height - insetMm * 2),
+        params: { ...shape.params },
+      };
+      // Adjust params that are absolute (in mm) — scale them down proportionally
+      if (insetShape.params) {
+        const sf = insetShape.width / shape.width;
+        const sfH = insetShape.height / shape.height;
+        ['arch_rise','peak_h','side_h'].forEach(k => { if (insetShape.params[k] != null) insetShape.params[k] = insetShape.params[k] * sfH; });
+        ['apex_x','peak_offset'].forEach(k => { if (insetShape.params[k] != null) insetShape.params[k] = insetShape.params[k] * sf; });
+        ['left_h','right_h'].forEach(k => { if (insetShape.params[k] != null) insetShape.params[k] = insetShape.params[k] * sfH; });
+      }
+      const tsInset = (xMm, yMm) => [
+        ox + (xMm + insetMm) * sx,
+        oy + (yMm + insetMm) * sy,
+      ];
+      const dGlass = shapePathString(insetShape, tsInset, sx, sy);
+      svg.appendChild(el('path', { d: dGlass, fill: glassColor, stroke: 'rgba(0,0,0,0.2)', 'stroke-width': 0.4 }));
+      // Optional dimension labels for non-rect (W on top, H on right)
+      if (showDims) {
+        const dimColor = '#7a7a7a';
+        const [tx1, ty1] = ts(bbox.x0, bbox.y0);
+        const [tx2] = ts(bbox.x1, bbox.y0);
+        svg.appendChild(el('line', { x1: tx1, y1: ty1 - 10, x2: tx2, y2: ty1 - 10, stroke: dimColor, 'stroke-width': 0.5, 'stroke-dasharray': '3,2' }));
+        const t1 = el('text', { x: (tx1 + tx2) / 2, y: ty1 - 14, 'text-anchor': 'middle', 'font-family': 'JetBrains Mono,monospace', 'font-size': 9, fill: dimColor, 'font-weight': 600 });
+        t1.textContent = shape.width + 'мм'; svg.appendChild(t1);
+        const [rx1, ry1] = ts(bbox.x1, bbox.y0);
+        const [, ry2] = ts(bbox.x1, bbox.y1);
+        svg.appendChild(el('line', { x1: rx1 + 10, y1: ry1, x2: rx1 + 10, y2: ry2, stroke: dimColor, 'stroke-width': 0.5, 'stroke-dasharray': '3,2' }));
+        const t2 = el('text', { x: rx1 + 14, y: (ry1 + ry2) / 2 + 3, 'text-anchor': 'start', 'font-family': 'JetBrains Mono,monospace', 'font-size': 9, fill: dimColor, 'font-weight': 600 });
+        t2.textContent = shape.height + 'мм'; svg.appendChild(t2);
+      }
+      return svg;
+    }
+
+    // outer frame (rectangle path)
     svg.appendChild(el('rect', { x: padLeft, y: padTop, width: innerW, height: innerH, fill: frameColor, rx: 2 }));
 
     // Track per-row Y positions and per-section x positions for dim labels
