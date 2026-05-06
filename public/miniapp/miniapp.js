@@ -1858,7 +1858,30 @@
 
       const NS = 'http://www.w3.org/2000/svg';
       function el(t, a) { const e = document.createElementNS(NS, t); for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]); return e; }
-      const svg = el('svg', { width: CANVAS_W, height: CANVAS_H, viewBox: `0 0 ${CANVAS_W} ${CANVAS_H}`, style: 'display:block;background:#fff;border-radius:8px;border:1px solid var(--rule);touch-action:none' });
+      const svg = el('svg', { width: CANVAS_W, height: CANVAS_H, viewBox: `0 0 ${CANVAS_W} ${CANVAS_H}`, style: 'display:block;background:#fff;border-radius:8px;border:1px solid var(--rule)' });
+      // Allow page-scroll on areas of the canvas that are not handles —
+      // touch-action:none is set per-handle, NOT on the whole SVG.
+
+      // ── Phase Vec-2: 100mm grid for visual orientation
+      const gridStep = 100;  // mm
+      const gridG = el('g', { stroke: '#e8e1d0', 'stroke-width': '0.5', fill: 'none' });
+      // Vertical grid lines every 100mm
+      for (let xMm = 0; xMm <= sh.width; xMm += gridStep) {
+        const [x1, y1] = toScreen(xMm, 0);
+        const [x2, y2] = toScreen(xMm, sh.height);
+        const ln = el('line', { x1, y1, x2, y2 });
+        // every 500mm — slightly darker
+        if (xMm % 500 === 0) ln.setAttribute('stroke', '#cfc7b5');
+        gridG.appendChild(ln);
+      }
+      for (let yMm = 0; yMm <= sh.height; yMm += gridStep) {
+        const [x1, y1] = toScreen(0, yMm);
+        const [x2, y2] = toScreen(sh.width, yMm);
+        const ln = el('line', { x1, y1, x2, y2 });
+        if (yMm % 500 === 0) ln.setAttribute('stroke', '#cfc7b5');
+        gridG.appendChild(ln);
+      }
+      svg.appendChild(gridG);
 
       // Compute geometry path + control handles based on shape kind
       const geo = computeShapeOnCanvas(sh, toScreen);
@@ -1871,7 +1894,7 @@
       const handles = computeHandles(sh, toScreen);
       handles.forEach((hd, idx) => {
         const c = el('circle', {
-          cx: hd.x, cy: hd.y, r: 11,
+          cx: hd.x, cy: hd.y, r: 14,  // larger touch target on mobile
           fill: '#fff', stroke: '#b56b3a', 'stroke-width': 2.5,
           style: 'cursor:grab;touch-action:none',
         });
@@ -1881,16 +1904,20 @@
         // Drag interaction
         let startTouch = null, startMmCoords = null;
         function onDown(ev) {
+          // Only stop propagation/default — don't block page scroll outside handles
+          ev.stopPropagation();
           ev.preventDefault();
           const t = (ev.touches && ev.touches[0]) || ev;
           startTouch = { x: t.clientX, y: t.clientY };
           startMmCoords = hd.getValue();
           c.setAttribute('stroke-width', '4');
-          c.setAttribute('r', '13');
+          c.setAttribute('r', '16');
           window.addEventListener('mousemove', onMove);
           window.addEventListener('mouseup', onUp);
+          // Non-passive so we can preventDefault during drag (otherwise page tries to scroll)
           window.addEventListener('touchmove', onMove, { passive: false });
           window.addEventListener('touchend', onUp);
+          window.addEventListener('touchcancel', onUp);
         }
         function onMove(ev) {
           ev.preventDefault?.();
@@ -1905,11 +1932,12 @@
         }
         function onUp() {
           c.setAttribute('stroke-width', '2.5');
-          c.setAttribute('r', '11');
+          c.setAttribute('r', '14');
           window.removeEventListener('mousemove', onMove);
           window.removeEventListener('mouseup', onUp);
           window.removeEventListener('touchmove', onMove);
           window.removeEventListener('touchend', onUp);
+          window.removeEventListener('touchcancel', onUp);
         }
         c.addEventListener('mousedown', onDown);
         c.addEventListener('touchstart', onDown, { passive: false });
@@ -2170,10 +2198,12 @@
         case 'gothic': {
           const rise = p.arch_rise || 500;
           const offset = p.peak_offset || 0;
-          H_('▼', W / 2 + offset, 0,
+          H_('▲', W / 2 + offset, 0,
             () => ({ rise, offset }),
+            // Drag DOWN (+dy) → peak moves down → rise DECREASES.
+            // Drag UP (−dy) → peak moves up → rise INCREASES.
             (v0, dx, dy) => {
-              sh.params.arch_rise = Math.max(50, Math.min(sh.height - 200, Math.round(v0.rise + dy)));
+              sh.params.arch_rise = Math.max(50, Math.min(sh.height - 200, Math.round(v0.rise - dy)));
               sh.params.peak_offset = Math.max(-W / 2, Math.min(W / 2, Math.round(v0.offset + dx)));
             });
           H_('W', W, H / 2,
@@ -2185,22 +2215,27 @@
           break;
         }
         case 'circle': {
-          const r = W / 2;
+          // Handle is on the rightmost edge (W, H/2). Dragging right by dx px
+          // moves the right edge by dx mm; circle stays centered, so width
+          // (= diameter) grows by dx. Width = height = diameter.
           H_('R', W, H / 2,
             () => sh.width,
             (v0, dx) => {
-              const newW = Math.max(300, Math.min(4000, Math.round(v0 + dx * 2)));
+              const newW = Math.max(300, Math.min(4000, Math.round(v0 + dx)));
               sh.width = newW; sh.height = newW;
             });
           break;
         }
         case 'oval': {
+          // Handle 'a' on right edge — drag changes width (= 2a).
+          // Handle 'b' on bottom edge — drag changes height (= 2b).
+          // No ×2 multiplier: dragging the edge by dx mm moves the edge by dx mm.
           H_('a', W, H / 2,
             () => sh.width,
-            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx * 2))); });
+            (v0, dx) => { sh.width = Math.max(300, Math.min(8000, Math.round(v0 + dx))); });
           H_('b', W / 2, H,
             () => sh.height,
-            (v0, dx, dy) => { sh.height = Math.max(300, Math.min(4000, Math.round(v0 + dy * 2))); });
+            (v0, dx, dy) => { sh.height = Math.max(300, Math.min(4000, Math.round(v0 + dy))); });
           break;
         }
         case 'pentagon': {
@@ -2314,10 +2349,12 @@
           break;
         }
         case 'trapezoid': {
+          // lh, rh = heights of left/right sides (matches server/shapes.js convention).
           const lh = p.left_h != null ? p.left_h : H;
           const rh = p.right_h != null ? p.right_h : H;
-          perim = Math.hypot(W, rh - lh) + (H - rh) + W + (H - lh);
-          area = 0.5 * W * (2 * H - lh - rh);
+          const topLen = Math.hypot(W, lh - rh);
+          perim = lh + W + rh + topLen;
+          area = 0.5 * W * (lh + rh);
           break;
         }
         case 'gothic': {

@@ -96,25 +96,28 @@ export function shapeTriangle({ width: w, height: h, apex_x = null }) {
   };
 }
 
-// ── Trapezoid (asymmetric: left side ≠ right side height) ───────────
+// ── Trapezoid (asymmetric: left side height ≠ right side height) ─────
+// Convention: left_h, right_h = HEIGHTS of the LEFT and RIGHT sides (mm).
+// Default lh=h, rh=h → rectangle. Smaller value = shorter side, vertex
+// pulled DOWN from the top by (h - side_h).
+// Vertices: TL=(0, h-lh), TR=(w, h-rh), BR=(w, h), BL=(0, h).
 export function shapeTrapezoid({ width: w, height: h, left_h = null, right_h = null }) {
   const lh = left_h != null ? left_h : h;
   const rh = right_h != null ? right_h : h;
-  // Vertices: (0, lh)=top-left, (w, rh)=top-right, (w, h)=bottom-right, (0, h)=bottom-left
-  const topLen = Math.hypot(w, rh - lh);
-  // Cut angles at each corner
-  const slope = Math.atan2(rh - lh, w) * 180 / PI;
+  const topLen = Math.hypot(w, lh - rh);
+  // Slope of the top edge in degrees from horizontal
+  const slope = Math.atan2(lh - rh, w) * 180 / PI;
   return {
-    svgPath: `M 0 ${lh} L ${w} ${rh} L ${w} ${h} L 0 ${h} Z`,
-    framePerim: topLen + (h - rh) + w + (h - lh),
-    framePerimStraight: topLen + (h - rh) + w + (h - lh),
+    svgPath: `M 0 ${h - lh} L ${w} ${h - rh} L ${w} ${h} L 0 ${h} Z`,
+    framePerim: lh + w + rh + topLen,
+    framePerimStraight: lh + w + rh + topLen,
     framePerimArched: 0,
-    glassArea: 0.5 * w * (2 * h - lh - rh),
+    glassArea: 0.5 * w * (lh + rh),
     bars: [
-      { kind: 'straight', role: 'низ',  length: w,           angles: [90, 90] },
-      { kind: 'straight', role: 'лев.', length: h - lh,      angles: [90, 90 - slope] },
-      { kind: 'straight', role: 'прав.',length: h - rh,      angles: [90 + slope, 90] },
-      { kind: 'straight', role: 'верх (скос)', length: topLen, angles: [90 - slope, 90 + slope] },
+      { kind: 'straight', role: 'низ',          length: w,      angles: [90, 90] },
+      { kind: 'straight', role: 'лев.',         length: lh,     angles: [90, 90 - slope] },
+      { kind: 'straight', role: 'прав.',        length: rh,     angles: [90 + slope, 90] },
+      { kind: 'straight', role: 'верх (скос)',  length: topLen, angles: [90 - slope, 90 + slope] },
     ],
   };
 }
