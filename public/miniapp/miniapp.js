@@ -963,8 +963,29 @@
       const sysObj = state.cache.systems.find(s => s.id === item.systemId);
       const glObj  = state.cache.glazing.find(g => g.id === item.glazingId);
       if (viewMode === 'front') {
+        // ── Aspect-aware canvas: compute w/h so inner drawable area matches the
+        // layout's actual aspect (W×H) — иначе окно 6000×3000 рисовалось бы
+        // в маленьком уголке 4:3-канваса. Учитываем padding под размерные подписи.
+        const lw = item.layout.width || 1500;
+        const lh = item.layout.height || 1400;
+        const aspect = lw / lh;
+        // Padding for dimension labels (showDims=true → padLeft 12 + padRight 50, padTop 22 + padBot 32)
+        const padX = 62, padY = 54;
+        const maxW = 340, maxH = 320;
+        const innerMaxW = maxW - padX;
+        const innerMaxH = maxH - padY;
+        let innerW, innerH;
+        if (innerMaxW / innerMaxH > aspect) {
+          innerH = innerMaxH;
+          innerW = innerH * aspect;
+        } else {
+          innerW = innerMaxW;
+          innerH = innerW / aspect;
+        }
+        const canvasW = Math.round(innerW + padX);
+        const canvasH = Math.round(innerH + padY);
         drawWrap.appendChild(window.WindowSchema({
-          w: 320, h: 240, layout: item.layout, showDims: true,
+          w: canvasW, h: canvasH, layout: item.layout, showDims: true,
           highlight: state.selected ? `${state.selected.ri}:${state.selected.ci}` : null,
           onPick: (ri, ci) => { state.selected = { ri, ci }; openSectionSheet(ri, ci); paint(); },
         }));
@@ -1072,71 +1093,28 @@
         body.appendChild(attrCard);
       }
 
-      // ── Phase 18: Shape of outer contour
+      // ── Phase 18: Shape of outer contour — compact summary + button to vector editor
+      // (Полный picker с draggable-точками в screens['shape-editor'])
       if ((state.cache.shapeTypes || []).length) {
-        body.appendChild(h('div', { class: 'section-label', style: 'display:flex;justify-content:space-between;align-items:baseline' }, [
-          h('span', {}, 'Форма окна'),
-          h('a', { onClick: () => go('shape-editor'), style: 'cursor:pointer;color:var(--accent);font-weight:600' }, '✏️ Редактор'),
-        ]));
-        const shapeCard = h('div', { class: 'card pad', style: 'margin-bottom:14px' });
         const curShape = item.shape?.kind || 'rectangle';
+        const sRow = state.cache.shapeTypes.find(s => s.code === curShape);
         const SHAPE_ICONS = { rectangle: '▭', arched: '⌒', half_circle: '◠', triangle: '▲', trapezoid: '⊿', gothic: '⌃', pentagon: '⬠', hexagon: '⬡', oval: '⬭', circle: '⬤', quarter_circle: '◔', polygon: '✚', bay: '⌐⌐⌐' };
-        shapeCard.appendChild(h('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px' },
-          state.cache.shapeTypes.map(s => {
-            const isSel = curShape === s.code;
-            return h('button', {
-              onClick: () => {
-                let params = {};
-                try { params = JSON.parse(s.params_schema || '{}'); } catch {}
-                item.shape = { kind: s.code, width: item.layout.width, height: item.layout.height, params };
-                paint();
-              },
-              style: `padding:8px 6px;border-radius:8px;border:1.5px solid ${isSel ? 'var(--accent)' : 'var(--rule)'};background:${isSel ? 'var(--accent)' : '#fff'};color:${isSel ? '#fff' : 'var(--text)'};font-size:11px;font-weight:${isSel ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px`,
-            }, [
-              h('span', { style: 'font-size:18px;line-height:1' }, SHAPE_ICONS[s.code] || '◌'),
-              h('span', { style: 'font-size:10px;text-align:center' }, s.name.replace(/\s*\(.+\)/, '')),
-            ]);
-          })));
-        // Parametric sliders for current shape
-        if (item.shape && item.shape.kind && item.shape.kind !== 'rectangle') {
-          const sh = item.shape;
-          if (!sh.params) sh.params = {};
-          const sRow = state.cache.shapeTypes.find(s => s.code === sh.kind);
-          let schema = {};
-          try { schema = JSON.parse(sRow?.params_schema || '{}'); } catch {}
-          const paramsList = h('div', { style: 'display:flex;flex-direction:column;gap:8px;margin-top:6px;padding-top:10px;border-top:1px dashed var(--rule)' });
-          Object.keys(schema).forEach(k => {
-            if (k === 'vertices' || k === 'panels') return; // handled separately
-            const val = sh.params[k] ?? schema[k];
-            const inp = h('input', { type: 'number', value: val, min: 0, max: 4000, style: 'flex:1;padding:6px 9px;border:1px solid var(--rule);border-radius:6px;font-family:var(--mono);font-size:13px;text-align:right' });
-            inp.addEventListener('change', () => { sh.params[k] = parseFloat(inp.value) || 0; paint(); });
-            paramsList.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
-              h('span', { style: 'flex:1;font-size:12px;color:var(--muted);font-family:var(--mono)' }, k),
-              inp,
-              h('span', { style: 'font-size:11px;color:var(--muted)' }, 'мм'),
-            ]));
-          });
-          // bay panels selector
-          if (sh.kind === 'bay') {
-            const inp = h('input', { type: 'number', value: sh.params.panels ?? 3, min: 3, max: 7, style: 'flex:1;padding:6px 9px;border:1px solid var(--rule);border-radius:6px;font-family:var(--mono);font-size:13px;text-align:right' });
-            inp.addEventListener('change', () => { sh.params.panels = parseInt(inp.value, 10) || 3; paint(); });
-            paramsList.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
-              h('span', { style: 'flex:1;font-size:12px;color:var(--muted)' }, 'Панелей'), inp,
-            ]));
-            const angleInp = h('input', { type: 'number', value: sh.params.angle ?? 135, min: 90, max: 180, style: 'flex:1;padding:6px 9px;border:1px solid var(--rule);border-radius:6px;font-family:var(--mono);font-size:13px;text-align:right' });
-            angleInp.addEventListener('change', () => { sh.params.angle = parseFloat(angleInp.value) || 135; paint(); });
-            paramsList.appendChild(h('div', { style: 'display:flex;align-items:center;gap:8px' }, [
-              h('span', { style: 'flex:1;font-size:12px;color:var(--muted)' }, 'Угол, °'), angleInp,
-            ]));
-          }
-          shapeCard.appendChild(paramsList);
-          // shape factor info
-          if (sRow) {
-            shapeCard.appendChild(h('div', { style: 'margin-top:8px;font-size:11px;color:var(--accent);font-family:var(--mono)' },
-              `Стекло ×${sRow.glass_factor}` + (sRow.bend_fee > 0 ? ` · Гибка ${fmtNum(sRow.bend_fee)} ₸` : '')));
-          }
-        }
-        body.appendChild(shapeCard);
+        body.appendChild(h('div', { class: 'section-label' }, 'Форма окна'));
+        body.appendChild(h('button', {
+          class: 'btn btn-secondary',
+          style: 'margin-bottom:14px;display:flex;align-items:center;gap:12px;justify-content:flex-start;text-align:left;width:100%;padding:12px 14px',
+          onClick: () => go('shape-editor'),
+        }, [
+          h('span', { style: 'font-size:24px;line-height:1' }, SHAPE_ICONS[curShape] || '◌'),
+          h('div', { style: 'flex:1;min-width:0' }, [
+            h('div', { style: 'font-size:14px;font-weight:600' }, sRow?.name || 'Прямоугольное'),
+            h('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px' },
+              (sRow && sRow.glass_factor > 1 ? `Стекло ×${sRow.glass_factor}` : '')
+              + (sRow && sRow.bend_fee > 0 ? ` · Гибка ${fmtNum(sRow.bend_fee)} ₸` : '')
+              + (curShape === 'rectangle' ? 'Стандартная' : '')),
+          ]),
+          h('span', { style: 'color:var(--accent);font-weight:600;font-size:12px' }, '✏️ Изменить'),
+        ]));
       }
 
       // ── Phase 1: Color of profile
@@ -1506,12 +1484,23 @@
         ]));
       }
 
-      // ── AR-примерка
+      // ── AR-примерка — полноширинная карточка-CTA с камерой
       body.appendChild(h('button', {
-        class: 'btn btn-secondary', style: 'margin-bottom:10px',
         onClick: () => go('ar'),
-      }, '🔍 Примерить через камеру (AR)'));
-      body.appendChild(h('button', { class: 'btn btn-accent', onClick: () => { state.lastResult = null; go('project'); } }, 'Готово'));
+        style: 'display:flex;align-items:center;gap:14px;width:100%;padding:14px 16px;margin-bottom:12px;border:1px solid var(--rule);border-radius:12px;background:linear-gradient(135deg,#fdfbf6 0%,#faf7f1 100%);cursor:pointer;text-align:left;font-family:inherit',
+      }, [
+        h('div', { style: 'width:42px;height:42px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0' }, '📷'),
+        h('div', { style: 'flex:1;min-width:0' }, [
+          h('div', { style: 'font-size:14px;font-weight:600;color:var(--text);letter-spacing:-.1px' }, 'Примерить через камеру'),
+          h('div', { style: 'font-size:11.5px;color:var(--muted);margin-top:2px' }, 'AR — наведи на проём, посмотри как будет смотреться'),
+        ]),
+        h('span', { style: 'color:var(--accent);font-size:18px;flex-shrink:0' }, '›'),
+      ]));
+      // ── Готово — primary CTA полной ширины
+      body.appendChild(h('button', {
+        class: 'btn btn-accent', style: 'width:100%;margin-bottom:8px',
+        onClick: () => { state.lastResult = null; go('project'); },
+      }, 'Готово'));
 
       body.appendChild(tabBar());
     }
@@ -2508,11 +2497,22 @@
       const colorObj = state.cache.colors.find(c => c.id === it.colorId);
       const colorHex = colorObj?.hex || '#ffffff';
       const aspectRatio = (it.layout?.width || 1500) / (it.layout?.height || 1400);
-      // Initial overlay size: ~60% of viewport's smaller dim
+      // Aspect-aware sizing — компенсируем padding WindowSchema (showDims=false → 12×4 = 48)
+      // чтобы inner-область рисунка соответствовала реальной пропорции окна.
       const vh = window.innerHeight, vw = window.innerWidth;
-      const baseDim = Math.min(vw, vh) * 0.6;
-      const overlayW = aspectRatio >= 1 ? baseDim : baseDim * aspectRatio;
-      const overlayH = aspectRatio >= 1 ? baseDim / aspectRatio : baseDim;
+      const maxOvW = vw * 0.85;
+      const maxOvH = vh * 0.55;
+      const padInner = 24;  // 12 paddings × 2 sides
+      const innerMaxW = maxOvW - padInner;
+      const innerMaxH = maxOvH - padInner;
+      let innerW, innerH;
+      if (innerMaxW / innerMaxH > aspectRatio) {
+        innerH = innerMaxH; innerW = innerH * aspectRatio;
+      } else {
+        innerW = innerMaxW; innerH = innerW / aspectRatio;
+      }
+      const overlayW = Math.round(innerW + padInner);
+      const overlayH = Math.round(innerH + padInner);
       // Phase AR-2: frame/sash — fully opaque RAL color (frame is solid, NOT transparent).
       // Only the glass is semi-transparent so the user sees through to the real wall.
       overlaySvg = window.WindowSchema({

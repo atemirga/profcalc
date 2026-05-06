@@ -149,7 +149,7 @@
     const totalW = layout.width || w_mm;
     const totalH = layout.height || h_mm;
 
-    const padRight = showDims ? 32 : 12;
+    const padRight = showDims ? 50 : 12;  // wide enough for 4-digit '1800мм' label
     const padBot = showDims ? 32 : 12;
     const padTop = showDims ? 22 : 12;
     const padLeft = showDims ? 12 : 12;
