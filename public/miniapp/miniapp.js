@@ -918,25 +918,110 @@
         ]),
       ]));
 
-      // Templates (compact strip — full picker via sheet)
-      body.appendChild(h('div', { style: 'display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px' }, [
-        h('div', { class: 'section-label', style: 'margin:0' }, 'Шаблон'),
-        h('a', { onClick: openTemplatePicker, style: 'cursor:pointer' }, 'Все 18 →'),
-      ]));
-      body.appendChild(h('div', { class: 'templates-grid', style: 'margin-bottom:18px' },
-        window.WINDOW_TEMPLATES.slice(0, 6).map(t => {
-          const card = h('div', { class: 'tpl', onClick: () => { item.layout = t.build(); state.selected = { ri: 0, ci: 0 }; paint(); } }, [
-            h('div', { class: 'preview' }),
-            h('div', { class: 'name' }, t.name),
-            h('div', { class: 'sub' }, t.sub),
-          ]);
-          card.querySelector('.preview').appendChild(window.WindowSchema({ w: 130, h: 90, layout: t.build(), showDims: false }));
-          return card;
-        }),
-      ));
-
-      // Drawing surface — Phase 11+17: view toggle (Анфас / Профиль / 3D)
+      // ── КОНСТРУКЦИЯ — unified section: choose mode (Из шаблона / Свой контур),
+      // then size, then preview. The mode toggles which sub-UI is visible:
+      //  • mode='template' → grid of WINDOW_TEMPLATES (стандартные раскладки)
+      //  • mode='custom'   → форма наружного контура + параметры (арка, треугольник…)
+      // Unified state: when shape.kind != 'rectangle' OR user explicitly switched →
+      // mode = custom; otherwise mode = template.
+      if (!item._mode) item._mode = (item.shape && item.shape.kind && item.shape.kind !== 'rectangle') ? 'custom' : 'template';
       body.appendChild(h('div', { class: 'section-label' }, 'Конструкция'));
+
+      // Mode toggle (segmented control)
+      body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:10px;padding:6px;background:#f0ece4' },
+        h('div', { style: 'display:flex;gap:4px;background:transparent' }, [
+          ['template', '📋 Из шаблона',  'готовые раскладки'],
+          ['custom',   '✏️ Свой контур', 'форма + размеры'],
+        ].map(([k, lbl, sub]) => {
+          const isSel = item._mode === k;
+          return h('button', {
+            onClick: () => { item._mode = k; paint(); },
+            style: `flex:1;padding:8px 10px;border-radius:8px;border:none;background:${isSel ? '#fff' : 'transparent'};color:${isSel ? 'var(--accent-dark)' : 'var(--muted)'};font-size:12.5px;font-weight:${isSel ? 700 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:1px;${isSel ? 'box-shadow:0 1px 3px rgba(0,0,0,.08)' : ''}`,
+          }, [
+            h('span', {}, lbl),
+            h('span', { style: 'font-size:10px;font-weight:500;opacity:.75' }, sub),
+          ]);
+        }))));
+
+      // ── MODE: TEMPLATE — pick from WINDOW_TEMPLATES
+      if (item._mode === 'template') {
+        body.appendChild(h('div', { style: 'display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px' }, [
+          h('div', { style: 'font-size:12.5px;color:var(--muted)' }, 'Готовые шаблоны раскладок'),
+          h('a', { onClick: openTemplatePicker, style: 'cursor:pointer;color:var(--accent);font-weight:600' }, 'Все 18 →'),
+        ]));
+        body.appendChild(h('div', { class: 'templates-grid', style: 'margin-bottom:14px' },
+          window.WINDOW_TEMPLATES.slice(0, 6).map(t => {
+            const card = h('div', { class: 'tpl', onClick: () => {
+              item.layout = t.build();
+              if (item.shape) item.shape = { kind: 'rectangle', width: item.layout.width, height: item.layout.height, params: {} };
+              state.selected = { ri: 0, ci: 0 };
+              paint();
+            } }, [
+              h('div', { class: 'preview' }),
+              h('div', { class: 'name' }, t.name),
+              h('div', { class: 'sub' }, t.sub),
+            ]);
+            card.querySelector('.preview').appendChild(window.WindowSchema({ w: 130, h: 90, layout: t.build(), showDims: false }));
+            return card;
+          }),
+        ));
+      }
+
+      // ── MODE: CUSTOM — outer-contour shape picker + vector editor entry
+      if (item._mode === 'custom') {
+        if ((state.cache.shapeTypes || []).length) {
+          if (!item.shape) item.shape = { kind: 'rectangle', width: item.layout.width, height: item.layout.height, params: {} };
+          const curShape = item.shape.kind || 'rectangle';
+          const sRow = state.cache.shapeTypes.find(s => s.code === curShape);
+          const SHAPE_ICONS = { rectangle: '▭', arched: '⌒', half_circle: '◠', triangle: '▲', trapezoid: '⊿', gothic: '⌃', pentagon: '⬠', hexagon: '⬡', oval: '⬭', circle: '⬤', quarter_circle: '◔', polygon: '✚', bay: '⌐⌐⌐' };
+          const SHAPE_NAMES = { rectangle: 'Прямоуг.', arched: 'Арка', half_circle: 'Полукруг', triangle: 'Треуг.', trapezoid: 'Трапеция', gothic: 'Готика', pentagon: 'Пентагон', hexagon: 'Гексагон', oval: 'Овал', circle: 'Круг', quarter_circle: '¼ круг', polygon: 'Многоуг.', bay: 'Эркер' };
+          // Inline shape kind grid (3x4)
+          body.appendChild(h('div', { style: 'font-size:12.5px;color:var(--muted);margin-bottom:8px' }, 'Форма наружного контура'));
+          body.appendChild(h('div', { class: 'card pad', style: 'margin-bottom:10px' },
+            h('div', { style: 'display:grid;grid-template-columns:repeat(4,1fr);gap:6px' },
+              ['rectangle','arched','half_circle','triangle','trapezoid','gothic','circle','oval','pentagon','hexagon','quarter_circle','polygon'].map(k => {
+                const isSel = curShape === k;
+                return h('button', {
+                  onClick: () => {
+                    item.shape.kind = k;
+                    const sR = state.cache.shapeTypes.find(s => s.code === k);
+                    let def = {};
+                    try { def = JSON.parse(sR?.params_schema || '{}'); } catch {}
+                    item.shape.params = { ...def };
+                    // Normalize W/H per shape requirements
+                    if (k === 'half_circle') item.shape.height = Math.round(item.shape.width / 2);
+                    else if (k === 'circle' || k === 'quarter_circle') {
+                      const d = Math.max(item.shape.width || 1500, item.shape.height || 1400);
+                      item.shape.width = d; item.shape.height = d;
+                    }
+                    item.layout.width = item.shape.width;
+                    item.layout.height = item.shape.height;
+                    paint();
+                  },
+                  style: `padding:8px 4px;border-radius:8px;border:1.5px solid ${isSel ? 'var(--accent)' : 'var(--rule)'};background:${isSel ? 'var(--accent)' : '#fff'};color:${isSel ? '#fff' : 'var(--text)'};font-size:10.5px;font-weight:${isSel ? 600 : 500};cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:2px`,
+                }, [
+                  h('span', { style: 'font-size:18px;line-height:1' }, SHAPE_ICONS[k] || '◌'),
+                  h('span', { style: 'font-size:10px' }, SHAPE_NAMES[k]),
+                ]);
+              }))));
+          // Vector editor button (для тонкой настройки точками)
+          body.appendChild(h('button', {
+            class: 'btn btn-secondary',
+            style: 'margin-bottom:14px;display:flex;align-items:center;gap:12px;justify-content:flex-start;text-align:left;width:100%;padding:12px 14px',
+            onClick: () => go('shape-editor'),
+          }, [
+            h('span', { style: 'font-size:22px;line-height:1' }, SHAPE_ICONS[curShape] || '◌'),
+            h('div', { style: 'flex:1;min-width:0' }, [
+              h('div', { style: 'font-size:13.5px;font-weight:600' }, '✏️ Векторный редактор'),
+              h('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px' },
+                (sRow ? sRow.name + (sRow.glass_factor > 1 ? ` · стекло ×${sRow.glass_factor}` : '') : 'настройка точками')),
+            ]),
+            h('span', { style: 'color:var(--accent);font-weight:600;font-size:14px' }, '›'),
+          ]));
+        }
+      }
+
+      // Drawing surface — common for both modes (Анфас / Профиль / 3D)
       const drawCard = h('div', { class: 'card pad', style: 'margin-bottom:14px' });
       drawCard.appendChild(h('div', { class: 'size-line' }, [
         h('div', { class: 'dims' }, `${item.layout.width} × ${item.layout.height} мм`),
@@ -963,25 +1048,16 @@
       const sysObj = state.cache.systems.find(s => s.id === item.systemId);
       const glObj  = state.cache.glazing.find(g => g.id === item.glazingId);
       if (viewMode === 'front') {
-        // ── Aspect-aware canvas: compute w/h so inner drawable area matches the
-        // layout's actual aspect (W×H) — иначе окно 6000×3000 рисовалось бы
-        // в маленьком уголке 4:3-канваса. Учитываем padding под размерные подписи.
         const lw = item.layout.width || 1500;
         const lh = item.layout.height || 1400;
         const aspect = lw / lh;
-        // Padding for dimension labels (showDims=true → padLeft 12 + padRight 50, padTop 22 + padBot 32)
         const padX = 62, padY = 54;
         const maxW = 340, maxH = 320;
         const innerMaxW = maxW - padX;
         const innerMaxH = maxH - padY;
         let innerW, innerH;
-        if (innerMaxW / innerMaxH > aspect) {
-          innerH = innerMaxH;
-          innerW = innerH * aspect;
-        } else {
-          innerW = innerMaxW;
-          innerH = innerW / aspect;
-        }
+        if (innerMaxW / innerMaxH > aspect) { innerH = innerMaxH; innerW = innerH * aspect; }
+        else { innerW = innerMaxW; innerH = innerW / aspect; }
         const canvasW = Math.round(innerW + padX);
         const canvasH = Math.round(innerH + padY);
         drawWrap.appendChild(window.WindowSchema({
@@ -1093,29 +1169,8 @@
         body.appendChild(attrCard);
       }
 
-      // ── Phase 18: Shape of outer contour — compact summary + button to vector editor
-      // (Полный picker с draggable-точками в screens['shape-editor'])
-      if ((state.cache.shapeTypes || []).length) {
-        const curShape = item.shape?.kind || 'rectangle';
-        const sRow = state.cache.shapeTypes.find(s => s.code === curShape);
-        const SHAPE_ICONS = { rectangle: '▭', arched: '⌒', half_circle: '◠', triangle: '▲', trapezoid: '⊿', gothic: '⌃', pentagon: '⬠', hexagon: '⬡', oval: '⬭', circle: '⬤', quarter_circle: '◔', polygon: '✚', bay: '⌐⌐⌐' };
-        body.appendChild(h('div', { class: 'section-label' }, 'Форма окна'));
-        body.appendChild(h('button', {
-          class: 'btn btn-secondary',
-          style: 'margin-bottom:14px;display:flex;align-items:center;gap:12px;justify-content:flex-start;text-align:left;width:100%;padding:12px 14px',
-          onClick: () => go('shape-editor'),
-        }, [
-          h('span', { style: 'font-size:24px;line-height:1' }, SHAPE_ICONS[curShape] || '◌'),
-          h('div', { style: 'flex:1;min-width:0' }, [
-            h('div', { style: 'font-size:14px;font-weight:600' }, sRow?.name || 'Прямоугольное'),
-            h('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px' },
-              (sRow && sRow.glass_factor > 1 ? `Стекло ×${sRow.glass_factor}` : '')
-              + (sRow && sRow.bend_fee > 0 ? ` · Гибка ${fmtNum(sRow.bend_fee)} ₸` : '')
-              + (curShape === 'rectangle' ? 'Стандартная' : '')),
-          ]),
-          h('span', { style: 'color:var(--accent);font-weight:600;font-size:12px' }, '✏️ Изменить'),
-        ]));
-      }
+      // ── Phase 18: Shape of outer contour
+      // (Перенесено в секцию КОНСТРУКЦИЯ выше — режим 'custom'. Блок здесь не нужен.)
 
       // ── Phase 1: Color of profile
       body.appendChild(h('div', { class: 'section-label' }, 'Цвет профиля'));
